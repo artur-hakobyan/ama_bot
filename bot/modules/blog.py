@@ -58,11 +58,11 @@ def preview_text(draft: dict, admin_url: str, issues: list) -> str:
 
 def preview_keyboard(draft_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Publish", callback_data=f"blog:pub:{draft_id}")],
-        [InlineKeyboardButton("🔄 Regenerate", callback_data=f"blog:regen:{draft_id}")],
-        [InlineKeyboardButton("🔀 Titel A/B", callback_data=f"blog:title:{draft_id}")],
-        [InlineKeyboardButton("✏️ Edit", callback_data=f"blog:editdraft:{draft_id}")],
-        [InlineKeyboardButton("🗑 Discard", callback_data=f"blog:discard:{draft_id}")],
+        [InlineKeyboardButton("✅ Veröffentlichen", callback_data=f"blog:pub:{draft_id}")],
+        [InlineKeyboardButton("🔄 Neu generieren", callback_data=f"blog:regen:{draft_id}"),
+         InlineKeyboardButton("🔀 Titel A/B", callback_data=f"blog:title:{draft_id}")],
+        [InlineKeyboardButton("✏️ Bearbeiten", callback_data=f"blog:editdraft:{draft_id}"),
+         InlineKeyboardButton("🗑 Verwerfen", callback_data=f"blog:discard:{draft_id}")],
     ])
 
 

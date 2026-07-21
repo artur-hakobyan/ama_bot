@@ -48,8 +48,12 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if check_password(services.config, text):
             services.db.set_unlocked(user.id, True)
             services.db.log_audit(user.id, "auth", "-", "ok", "unlocked")
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass  # deletion is best-effort; the unlock must not fail on it
             await update.effective_message.reply_text(
-                MAIN_MENU_TEXT,
+                "🔓 Entsperrt.\n" + MAIN_MENU_TEXT,
                 reply_markup=main_menu_keyboard(context.bot_data["modules"]))
         else:
             services.db.log_audit(user.id, "auth", "-", "failed", "wrong password")
