@@ -15,6 +15,7 @@ from bot.shopify_client import ShopifyClient
 
 logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s",
                     level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 MAIN_MENU_TEXT = "AMAwalls Ops — was möchtest du tun?"
 
@@ -71,8 +72,21 @@ async def noop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    services = context.bot_data["services"]
+    user = update.effective_user
+    if user is not None:
+        services.db.set_step(user.id, None, {})
     await query.edit_message_text(
         MAIN_MENU_TEXT, reply_markup=main_menu_keyboard(context.bot_data["modules"]))
+
+
+async def error_handler(update, context):
+    logging.getLogger(__name__).error("Unhandled error", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text("❌ Unerwarteter Fehler — bitte /start.")
+        except Exception:
+            pass
 
 
 def build_application(services: Services, modules) -> Application:
@@ -85,6 +99,7 @@ def build_application(services: Services, modules) -> Application:
     for mod in modules:
         mod.register(app)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
+    app.add_error_handler(error_handler)
     return app
 
 

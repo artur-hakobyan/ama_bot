@@ -18,7 +18,7 @@ def test_main_menu_keyboard():
 import pytest
 from bot.config import Config
 from bot.db import Database
-from bot.main import start_cmd, text_router
+from bot.main import error_handler, main_menu_cb, start_cmd, text_router
 
 CFG = Config.load({
     "TELEGRAM_BOT_TOKEN": "t", "BOT_PASSWORD": "geheim",
@@ -65,3 +65,21 @@ async def test_router_dispatches_to_module_step(services):
     await text_router(u, make_context(services, [mod]))
     handle.assert_awaited_once()
     assert handle.await_args.args[0] == "blog:topic"
+
+
+def make_cb_update(user_id):
+    query = SimpleNamespace(answer=AsyncMock(), edit_message_text=AsyncMock())
+    return SimpleNamespace(effective_user=SimpleNamespace(id=user_id),
+                           callback_query=query)
+
+
+async def test_main_menu_cb_clears_lingering_step(services):
+    services.db.set_step(111, "blog:topic", {})
+    u = make_cb_update(111)
+    await main_menu_cb(u, make_context(services))
+    assert services.db.get_session(111)["step"] is None
+
+
+async def test_error_handler_does_not_raise_for_non_update():
+    ctx = SimpleNamespace(error=RuntimeError("boom"))
+    await error_handler(None, ctx)

@@ -112,6 +112,9 @@ This rsyncs the repo to `/opt/amma_bot` on the target host (excluding `.env`, `*
 `requirements.txt`, installs `deploy/amma-bot.service` as the systemd unit, and restarts the
 `amma-bot` service.
 
+`deploy.sh` requires passwordless sudo on the target host for its `systemctl`/`cp` steps (no TTY
+is available for a sudo password prompt over the non-interactive SSH session it uses).
+
 The systemd unit (`deploy/amma-bot.service`) runs `/opt/amma_bot/.venv/bin/python -m bot.main`
 as the `amma` user with `Restart=always`. `.env` is loaded from the working directory by
 `python-dotenv`, so no `EnvironmentFile=` is needed in the unit.

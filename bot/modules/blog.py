@@ -33,19 +33,26 @@ def chosen_title(draft: dict) -> str:
     return draft["title_a"] if draft["chosen_title"] == "a" else draft["title_b"]
 
 
+def md_escape(text: str) -> str:
+    """Escape legacy-Markdown specials so dynamic content can't break parse_mode='Markdown'."""
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
 def preview_text(draft: dict, admin_url: str, issues: list) -> str:
     lines = [
-        f"📄 *{chosen_title(draft)}*",
+        f"📄 *{md_escape(chosen_title(draft))}*",
         "",
-        draft["summary"] or "",
+        md_escape(draft["summary"] or ""),
         "",
-        f"Tags: {', '.join(draft['tags'])}" if draft["tags"] else "",
+        f"Tags: {md_escape(', '.join(draft['tags']))}" if draft["tags"] else "",
         f"Admin: {admin_url}",
         "",
         "Status: Entwurf (unveröffentlicht)",
     ]
     if issues:
-        lines += ["", "⚠️ Selbst-Check:"] + [f"• {i}" for i in issues]
+        lines += ["", "⚠️ Selbst-Check:"] + [f"• {md_escape(i)}" for i in issues]
     return "\n".join(line for line in lines if line is not None)
 
 
@@ -95,10 +102,17 @@ async def _create_and_preview(update, context, answers: dict, user_id: int):
     """Claude draft → self-check → Shopify draft article → preview message."""
     services = context.bot_data["services"]
     msg = update.effective_message
+    topic = answers.get("topic")
+    if not topic:
+        await msg.reply_text(
+            "⚠️ Ursprüngliche Angaben fehlen — bitte neu starten.",
+            reply_markup=blog_menu_keyboard())
+        return
+    design = answers.get("design", "kein bestimmtes Design")
     await msg.reply_text("✍️ Claude schreibt den Entwurf …")
     try:
         draft_data = await services.claude.draft_article(
-            answers["topic"], answers["design"], answers.get("must", "-"))
+            topic, design, answers.get("must", "-"))
         check = await services.claude.self_check(draft_data)
     except ClaudeError as e:
         services.db.log_audit(user_id, "draft", "-", "error", str(e))
@@ -212,6 +226,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if action == "menu":
+        services.db.set_step(user_id, None, {})
         await query.edit_message_text("📝 Blog — was tun?",
                                       reply_markup=blog_menu_keyboard())
         return
@@ -321,7 +336,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ShopifyError:
             live = services.shopify.admin_url(gid)
         await query.edit_message_text(
-            f"✅ Veröffentlicht: *{chosen_title(draft)}*\n{live}",
+            f"✅ Veröffentlicht: *{md_escape(chosen_title(draft))}*\n{live}",
             parse_mode="Markdown")
 
     elif action == "regen":

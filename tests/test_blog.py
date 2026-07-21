@@ -34,6 +34,19 @@ def test_preview_text_contains_essentials():
     assert "https://x/admin/articles/9" in text and "zu lang" in text
 
 
+def test_md_escape_escapes_specials():
+    assert blog.md_escape("Wand *mit* _Charme_") == r"Wand \*mit\* \_Charme\_"
+    assert blog.md_escape("a`b[c") == r"a\`b\[c"
+
+
+def test_preview_text_escapes_dynamic_markdown():
+    draft = make_draft(title_a="Wand *mit* _Charme_")
+    text = blog.preview_text(draft, "https://x/admin/articles/9", [])
+    assert "*mit*" not in text
+    assert r"\*mit\*" in text
+    assert r"\_Charme\_" in text
+
+
 def test_preview_keyboard_actions():
     kb = blog.preview_keyboard("abc123")
     datas = [b.callback_data for row in kb.inline_keyboard for b in row]
@@ -155,3 +168,20 @@ async def test_edit_existing_title_flow(services):
     await blog.handle_step("blog:exttitle", ut, make_ctx(services))
     services.shopify.update_article.assert_awaited_with(
         "gid://shopify/Article/5", {"title": "Neuer Titel"})
+
+
+async def test_menu_callback_clears_lingering_step(services):
+    services.db.set_step(111, "blog:topic", {})
+    u = make_cb_update("blog:menu")
+    await blog.callbacks.__wrapped__(u, make_ctx(services))
+    assert services.db.get_session(111)["step"] is None
+
+
+async def test_create_and_preview_without_topic_shows_warning(services):
+    ctx = make_ctx(services)
+    services.db.set_step(111, "blog:must", {"design": "X"})
+    u = make_text_update("-")
+    await blog.handle_step("blog:must", u, ctx)
+    services.claude.draft_article.assert_not_awaited()
+    reply = u.effective_message.reply_text
+    assert "Ursprüngliche Angaben" in reply.await_args.args[0]
