@@ -1,0 +1,116 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from bot.config import Config
+from bot.db import Database
+from bot.modules import blog
+from bot.modules.registry import Services
+
+
+def make_draft(**over):
+    d = {"id": "abc123", "user_id": 1, "shopify_article_gid": "gid://shopify/Article/9",
+         "title_a": "Titel A", "title_b": "Titel B", "chosen_title": "a",
+         "body_html": "<p>x</p>", "summary": "Zusammenfassung", "tags": ["wand"],
+         "status": "pending"}
+    d.update(over)
+    return d
+
+
+def test_parse_cb():
+    assert blog.parse_cb("blog:pub:abc123") == ("pub", "abc123")
+    assert blog.parse_cb("blog:new") == ("new", None)
+
+
+def test_chosen_title():
+    assert blog.chosen_title(make_draft()) == "Titel A"
+    assert blog.chosen_title(make_draft(chosen_title="b")) == "Titel B"
+
+
+def test_preview_text_contains_essentials():
+    text = blog.preview_text(make_draft(), "https://x/admin/articles/9", ["zu lang"])
+    assert "Titel A" in text and "Zusammenfassung" in text
+    assert "https://x/admin/articles/9" in text and "zu lang" in text
+
+
+def test_preview_keyboard_actions():
+    kb = blog.preview_keyboard("abc123")
+    datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert datas == ["blog:pub:abc123", "blog:regen:abc123", "blog:title:abc123",
+                     "blog:editdraft:abc123", "blog:discard:abc123"]
+
+
+def test_design_slug_roundtrip():
+    assert blog.DESIGNS["jelly"] == "Silent Jelly"
+    assert blog.DESIGNS["unberuehrt"] == "Unberührt"
+    assert blog.DESIGNS["poppy"] == "Poppy Seed Explosion"
+    assert blog.DESIGNS["none"] == "kein bestimmtes Design"
+
+
+CFG = Config.load({
+    "TELEGRAM_BOT_TOKEN": "t", "BOT_PASSWORD": "pw",
+    "ALLOWLIST_USER_IDS": "111", "ANTHROPIC_API_KEY": "k",
+    "SHOPIFY_STORE_DOMAIN": "d", "SHOPIFY_ADMIN_TOKEN": "s",
+    "SHOPIFY_API_VERSION": "2026-07", "BLOG_ID": "gid://shopify/Blog/1",
+})
+
+
+@pytest.fixture
+def services(tmp_path):
+    db = Database(str(tmp_path / "t.db"))
+    db.set_unlocked(111, True)
+    shopify = SimpleNamespace(
+        create_article=AsyncMock(return_value={"id": "gid://shopify/Article/9",
+                                               "title": "Titel A", "handle": "titel-a",
+                                               "isPublished": False}),
+        publish_article=AsyncMock(return_value={"id": "gid://shopify/Article/9",
+                                                "title": "Titel A", "handle": "titel-a",
+                                                "isPublished": True}),
+        delete_article=AsyncMock(return_value="gid://shopify/Article/9"),
+        update_article=AsyncMock(),
+        list_articles=AsyncMock(return_value=("news", [])),
+        admin_url=lambda gid: f"https://d/admin/articles/{gid.rsplit('/', 1)[-1]}",
+        live_url=lambda bh, ah: f"https://d/blogs/{bh}/{ah}",
+    )
+    claude = SimpleNamespace(
+        draft_article=AsyncMock(return_value={
+            "title_a": "Titel A", "title_b": "Titel B", "body_html": "<p>x</p>",
+            "summary": "Zsf", "tags": ["wand"]}),
+        self_check=AsyncMock(return_value={"ok": True, "issues": []}),
+        revise_article=AsyncMock(return_value="<p>neu</p>"),
+    )
+    yield Services(config=CFG, db=db, shopify=shopify, claude=claude)
+    db.close()
+
+
+def make_ctx(services):
+    return SimpleNamespace(bot_data={"services": services, "modules": []})
+
+
+def make_text_update(text):
+    msg = SimpleNamespace(text=text, reply_text=AsyncMock())
+    return SimpleNamespace(effective_user=SimpleNamespace(id=111),
+                           effective_message=msg, message=msg)
+
+
+async def test_full_new_article_flow(services):
+    ctx = make_ctx(services)
+    # Q1: topic
+    services.db.set_step(111, "blog:topic", {})
+    await blog.handle_step("blog:topic", make_text_update("Dachschräge"), ctx)
+    s = services.db.get_session(111)
+    assert s["step"] is None  # waiting on design button, not a text step
+    assert s["context"]["topic"] == "Dachschräge"
+    # Q2 (design) is a callback; simulate its effect then Q3: must-include text
+    services.db.set_step(111, "blog:must", {"topic": "Dachschräge", "design": "Silent Jelly"})
+    u = make_text_update("-")
+    await blog.handle_step("blog:must", u, ctx)
+    # draft created in shopify as draft + db row exists
+    services.shopify.create_article.assert_awaited_once()
+    assert services.shopify.create_article.await_args.args[0] == CFG.blog_id
+    # preview replied with keyboard
+    reply = u.effective_message.reply_text
+    assert reply.await_count >= 1
+    kwargs = reply.await_args.kwargs
+    assert kwargs.get("reply_markup") is not None
