@@ -36,6 +36,16 @@ def test_update_draft_rejects_unknown_column(db):
     with pytest.raises(ValueError):
         db.update_draft(did, evil="x; DROP TABLE drafts")
 
+def test_update_draft_with_no_fields_raises_error(db):
+    did = db.create_draft(1, "a", "b", "c", "d", [])
+    with pytest.raises(ValueError):
+        db.update_draft(did)
+
+def test_update_draft_rejects_invalid_chosen_title(db):
+    did = db.create_draft(1, "a", "b", "c", "d", [])
+    with pytest.raises(ValueError):
+        db.update_draft(did, chosen_title="z")
+
 def test_audit(db):
     db.log_audit(42, "publish", "gid://shopify/Article/1", "ok", "live")
     rows = db._conn.execute("SELECT * FROM audit_log").fetchall()

@@ -103,9 +103,13 @@ class Database:
         return d
 
     def update_draft(self, draft_id: str, **fields):
+        if not fields:
+            raise ValueError("update_draft called with no fields")
         unknown = set(fields) - DRAFT_COLUMNS
         if unknown:
             raise ValueError(f"Unknown draft columns: {unknown}")
+        if "chosen_title" in fields and fields["chosen_title"] not in ("a", "b"):
+            raise ValueError(f"chosen_title must be 'a' or 'b', got {fields['chosen_title']!r}")
         sets = ", ".join(f"{c} = ?" for c in fields)
         self._conn.execute(
             f"UPDATE drafts SET {sets} WHERE id = ?",
