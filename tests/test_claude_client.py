@@ -33,6 +33,13 @@ async def test_retry_once_then_raise():
     assert create.await_count == 2
 
 
+async def test_draft_article_missing_keys_raises():
+    fake, _ = fake_anthropic('{"title_a": "A"}')
+    c = ClaudeClient("k", "m", client=fake)
+    with pytest.raises(ClaudeError, match="issing keys"):
+        await c.draft_article("t", "d", "-")
+
+
 async def test_self_check():
     fake, _ = fake_anthropic('{"ok": false, "issues": ["zu werblich"]}')
     c = ClaudeClient("k", "m", client=fake)
