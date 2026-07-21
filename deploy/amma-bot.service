@@ -1,0 +1,16 @@
+[Unit]
+Description=AMAwalls Ops Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=amma
+WorkingDirectory=/opt/amma_bot
+ExecStart=/opt/amma_bot/.venv/bin/python -m bot.main
+Restart=always
+RestartSec=5
+# .env is read by python-dotenv from WorkingDirectory; no EnvironmentFile needed
+
+[Install]
+WantedBy=multi-user.target
