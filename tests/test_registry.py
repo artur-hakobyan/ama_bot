@@ -21,7 +21,7 @@ from bot.db import Database
 from bot.main import error_handler, main_menu_cb, start_cmd, text_router
 
 CFG = Config.load({
-    "TELEGRAM_BOT_TOKEN": "t", "BOT_PASSWORD": "geheim",
+    "TELEGRAM_BOT_TOKEN": "t",
     "ALLOWLIST_USER_IDS": "111", "ANTHROPIC_API_KEY": "k",
     "SHOPIFY_STORE_DOMAIN": "d", "SHOPIFY_ADMIN_TOKEN": "s",
     "SHOPIFY_API_VERSION": "2026-07", "BLOG_ID": "g",
@@ -47,14 +47,14 @@ async def test_start_silent_for_stranger(services):
     await start_cmd(u, make_context(services))
     u.effective_message.reply_text.assert_not_awaited()
 
-async def test_password_flow(services):
-    ctx = make_context(services)
-    u = make_update(111, "falsch")
-    await text_router(u, ctx)
-    assert "Wrong" in u.effective_message.reply_text.await_args.args[0]
-    u2 = make_update(111, "geheim")
-    await text_router(u2, ctx)
-    assert services.db.get_session(111)["unlocked"] is True
+async def test_start_shows_menu_for_allowlisted(services):
+    from bot.main import start_cmd
+    u = make_update(111)
+    await start_cmd(u, make_context(services))
+    args = u.effective_message.reply_text.await_args
+    assert "AMAwalls Ops" in args.args[0]
+    assert args.kwargs.get("reply_markup") is not None
+
 
 async def test_router_dispatches_to_module_step(services):
     handle = AsyncMock()

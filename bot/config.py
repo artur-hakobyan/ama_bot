@@ -8,7 +8,7 @@ class ConfigError(Exception):
 
 
 REQUIRED_KEYS = [
-    "TELEGRAM_BOT_TOKEN", "BOT_PASSWORD", "ALLOWLIST_USER_IDS",
+    "TELEGRAM_BOT_TOKEN", "ALLOWLIST_USER_IDS",
     "ANTHROPIC_API_KEY", "SHOPIFY_STORE_DOMAIN", "SHOPIFY_ADMIN_TOKEN",
     "SHOPIFY_API_VERSION", "BLOG_ID",
 ]
@@ -17,7 +17,6 @@ REQUIRED_KEYS = [
 @dataclass(frozen=True)
 class Config:
     telegram_bot_token: str
-    bot_password: str
     allowlist_user_ids: frozenset
     anthropic_api_key: str
     shopify_store_domain: str
@@ -51,7 +50,6 @@ class Config:
             raise ConfigError("WEBHOOK_URL is required when TRANSPORT=webhook")
         return cls(
             telegram_bot_token=env["TELEGRAM_BOT_TOKEN"],
-            bot_password=env["BOT_PASSWORD"],
             allowlist_user_ids=ids,
             anthropic_api_key=env["ANTHROPIC_API_KEY"],
             shopify_store_domain=env["SHOPIFY_STORE_DOMAIN"],

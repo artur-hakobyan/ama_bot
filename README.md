@@ -3,7 +3,7 @@
 A Telegram bot for the AMAwalls team to run store operations from chat. It's built with
 `python-telegram-bot`, stores its state in SQLite, drafts and publishes blog articles through
 the Shopify Admin GraphQL API, and generates on-brand copy with Claude. Access is gated by a
-two-layer check: a Telegram user-ID allowlist, then a shared password to unlock the menu. The
+Telegram user-ID allowlist — anyone not on it gets no response at all. The
 first shipped module is Blog (generate a draft, review it, publish or discard it); more modules
 can be added without touching the core.
 
@@ -24,7 +24,6 @@ below explains where each value comes from.
 | Key | Description |
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Bot token from [@BotFather](https://t.me/BotFather) (revoke old tokens after rotating). |
-| `BOT_PASSWORD` | Shared unlock password — the second auth layer on top of the allowlist. |
 | `ALLOWLIST_USER_IDS` | Comma-separated Telegram numeric user IDs allowed to use the bot. Get your numeric ID from [@userinfobot](https://t.me/userinfobot). |
 | `ANTHROPIC_API_KEY` | Anthropic API key used for content generation. |
 | `CLAUDE_MODEL` | Optional model override (default `claude-sonnet-5`). |

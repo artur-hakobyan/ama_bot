@@ -5,7 +5,7 @@ from telegram import BotCommand, Update
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
-from bot.auth import PASSWORD_PROMPT, check_password, is_allowlisted
+from bot.auth import is_allowlisted
 from bot.claude_client import ClaudeClient
 from bot.config import Config
 from bot.db import Database
@@ -27,9 +27,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user:
             services.db.log_audit(user.id, "access", "/start", "denied", "not allowlisted")
         return
-    if not services.db.get_session(user.id)["unlocked"]:
-        await update.effective_message.reply_text(PASSWORD_PROMPT)
-        return
     await update.effective_message.reply_text(
         MAIN_MENU_TEXT, reply_markup=main_menu_keyboard(context.bot_data["modules"]))
 
@@ -42,24 +39,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             services.db.log_audit(user.id, "access", "message", "denied", "not allowlisted")
         return
     session = services.db.get_session(user.id)
-    text = (update.effective_message.text or "").strip()
-
-    if not session["unlocked"]:
-        if check_password(services.config, text):
-            services.db.set_unlocked(user.id, True)
-            services.db.log_audit(user.id, "auth", "-", "ok", "unlocked")
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass  # deletion is best-effort; the unlock must not fail on it
-            await update.effective_message.reply_text(
-                "🔓 Unlocked.\n" + MAIN_MENU_TEXT,
-                reply_markup=main_menu_keyboard(context.bot_data["modules"]))
-        else:
-            services.db.log_audit(user.id, "auth", "-", "failed", "wrong password")
-            await update.effective_message.reply_text("❌ Wrong password.")
-        return
-
     step = session["step"]
     if step and ":" in step:
         module_name = step.split(":", 1)[0]
@@ -76,9 +55,6 @@ async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user is None or not is_allowlisted(services.config, user.id):
         if user:
             services.db.log_audit(user.id, "access", "/stop", "denied", "not allowlisted")
-        return
-    if not services.db.get_session(user.id)["unlocked"]:
-        await update.effective_message.reply_text(PASSWORD_PROMPT)
         return
     services.db.set_step(user.id, None, {})
     services.db.log_audit(user.id, "stop", "-", "ok", "flow cancelled")

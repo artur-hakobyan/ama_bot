@@ -22,7 +22,7 @@ def test_load_valid():
 def test_missing_keys_all_listed():
     with pytest.raises(ConfigError) as exc:
         Config.load({"TELEGRAM_BOT_TOKEN": "x"})
-    assert "BOT_PASSWORD" in str(exc.value) and "BLOG_ID" in str(exc.value)
+    assert "ANTHROPIC_API_KEY" in str(exc.value) and "BLOG_ID" in str(exc.value)
 
 def test_bad_allowlist():
     with pytest.raises(ConfigError):

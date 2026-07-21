@@ -9,7 +9,7 @@ These rules come from the project owner and are non-negotiable. They exist becau
 
 ## The rules
 
-1. **No hardcoded secrets, ever.** Every sensitive value (bot token, password, Anthropic key, Shopify token) is read from the gitignored `.env`. When adding a new config value: add it to `.env.example` with a comment and empty value, add it to `bot/config.py` (`Config.load` fails fast listing missing required keys), and document it in the README table. Never print or log secrets — note that `logging.getLogger("httpx")` is pinned to WARNING precisely because httpx leaks the bot token at INFO.
+1. **No hardcoded secrets, ever.** Every sensitive value (bot token, Anthropic key, Shopify token) is read from the gitignored `.env`. When adding a new config value: add it to `.env.example` with a comment and empty value, add it to `bot/config.py` (`Config.load` fails fast listing missing required keys), and document it in the README table. Never print or log secrets — note that `logging.getLogger("httpx")` is pinned to WARNING precisely because httpx leaks the bot token at INFO.
 
 2. **Shopify Admin GraphQL only.** All Shopify calls go through `bot/shopify_client.py` hitting `/admin/api/{version}/graphql.json` with `X-Shopify-Access-Token`. REST is legacy — do not use it, and do not scatter Shopify HTTP calls outside the client. Every mutation checks `userErrors` and raises `ShopifyError` with the messages; handlers surface these verbatim in chat.
 
@@ -17,7 +17,7 @@ These rules come from the project owner and are non-negotiable. They exist becau
 
 4. **Dev store first.** Build and test against the development store. Going live must remain nothing more than swapping `SHOPIFY_STORE_DOMAIN` + `SHOPIFY_ADMIN_TOKEN` (+ `BLOG_ID`) in `.env` — never introduce code that branches on "prod vs dev".
 
-5. **Two-layer auth on every handler.** The Telegram user-ID allowlist is the real gate: non-allowlisted users get **no response at all** (silent drop, but audit-logged). The password unlock sits on top. Every new handler must be gated (`@authorized` from `bot/auth.py`, or the inline check pattern in `bot/main.py`) — an ungated handler is an auth bypass.
+5. **Allowlist auth on every handler.** The Telegram user-ID allowlist is the only gate (owner decision 2026-07-21: the original password layer was removed; three team members use the bot). Non-allowlisted users get **no response at all** (silent drop, but audit-logged). Every new handler must be gated (`@authorized` from `bot/auth.py`, or the inline check pattern in `bot/main.py`) — an ungated handler is an auth bypass. New members = add their numeric ID to `ALLOWLIST_USER_IDS` in `.env` and restart.
 
 6. **Audit everything.** Every state-changing action writes `audit_log` (user id, action, target, result, detail) — on success AND error paths.
 
