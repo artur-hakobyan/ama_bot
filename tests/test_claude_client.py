@@ -45,3 +45,12 @@ async def test_self_check():
     c = ClaudeClient("k", "m", client=fake)
     r = await c.self_check({"title_a": "A", "body_html": "<p></p>", "summary": ""})
     assert r["ok"] is False and r["issues"] == ["zu werblich"]
+
+
+async def test_draft_article_uses_structured_outputs():
+    fake, create = fake_anthropic('{"title_a":"A","title_b":"B","body_html":"<p>x</p>","summary":"s","tags":["t"]}')
+    c = ClaudeClient("k", "m", client=fake)
+    await c.draft_article("t", "d", "-")
+    fmt = create.await_args.kwargs["output_config"]["format"]
+    assert fmt["type"] == "json_schema"
+    assert "body_html" in fmt["schema"]["properties"]

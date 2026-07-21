@@ -56,19 +56,52 @@ KEINE Werbung: informativ und nützlich zuerst.
 Wenn du nach JSON gefragt wirst, antworte NUR mit validem JSON, ohne Erklärtext."""
 
 
+DRAFT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title_a": {"type": "string"},
+        "title_b": {"type": "string"},
+        "body_html": {"type": "string"},
+        "summary": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["title_a", "title_b", "body_html", "summary", "tags"],
+    "additionalProperties": False,
+}
+
+CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "ok": {"type": "boolean"},
+        "issues": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["ok", "issues"],
+    "additionalProperties": False,
+}
+
+
 class ClaudeClient:
     def __init__(self, api_key: str, model: str, client=None):
         self._client = client or AsyncAnthropic(api_key=api_key)
         self._model = model
 
-    async def _ask(self, prompt: str, max_tokens: int = 4096) -> str:
+    async def _ask(self, prompt: str, max_tokens: int = 4096,
+                   output_schema: dict | None = None) -> str:
+        # output_schema uses the API's structured outputs: the response text is
+        # guaranteed to be valid JSON matching the schema (no hand-rolled JSON
+        # from the model, which breaks on long HTML strings).
+        kwargs = {}
+        if output_schema is not None:
+            kwargs["output_config"] = {
+                "format": {"type": "json_schema", "schema": output_schema}}
         last_error = None
         for _ in range(2):
             try:
                 resp = await self._client.messages.create(
                     model=self._model, max_tokens=max_tokens,
                     system=SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}])
+                    messages=[{"role": "user", "content": prompt}],
+                    **kwargs)
                 return resp.content[0].text
             except Exception as e:  # anthropic transport/API errors
                 last_error = e
@@ -104,7 +137,8 @@ Antworte als JSON mit exakt diesen Keys:
  "body_html": "vollständiger Artikel als sauberes HTML (<p>, <h2>, <ol>/<ul>, sparsames <strong>), 500-900 Wörter",
  "summary": "Meta-Description: max. 160 Zeichen, enthält das Haupt-Keyword",
  "tags": ["haupt-keyword als erster tag", "dann", "2-4", "weitere"]}}"""
-        draft = self._parse_json(await self._ask(prompt))
+        draft = self._parse_json(
+            await self._ask(prompt, max_tokens=8192, output_schema=DRAFT_SCHEMA))
         missing = {"title_a", "title_b", "body_html", "summary", "tags"} - set(draft)
         if missing:
             raise ClaudeError(f"Draft missing keys: {missing}")
@@ -133,7 +167,8 @@ Zusammenfassung: {draft.get("summary")}
 Artikel: {draft.get("body_html")}
 
 Antworte als JSON: {{"ok": true/false, "issues": ["konkrete Probleme, leer wenn ok"]}}"""
-        result = self._parse_json(await self._ask(prompt, max_tokens=1024))
+        result = self._parse_json(
+            await self._ask(prompt, max_tokens=1024, output_schema=CHECK_SCHEMA))
         return {"ok": bool(result.get("ok")), "issues": list(result.get("issues") or [])}
 
     async def alt_text(self, description: str) -> str:
