@@ -1,7 +1,7 @@
 import logging
 
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
@@ -17,7 +17,7 @@ logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s",
                     level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-MAIN_MENU_TEXT = "AMAwalls Ops — was möchtest du tun?"
+MAIN_MENU_TEXT = "AMAwalls Ops — what would you like to do?"
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -53,11 +53,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass  # deletion is best-effort; the unlock must not fail on it
             await update.effective_message.reply_text(
-                "🔓 Entsperrt.\n" + MAIN_MENU_TEXT,
+                "🔓 Unlocked.\n" + MAIN_MENU_TEXT,
                 reply_markup=main_menu_keyboard(context.bot_data["modules"]))
         else:
             services.db.log_audit(user.id, "auth", "-", "failed", "wrong password")
-            await update.effective_message.reply_text("❌ Falsches Passwort.")
+            await update.effective_message.reply_text("❌ Wrong password.")
         return
 
     step = session["step"]
@@ -69,8 +69,26 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
 
+async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel whatever flow is in progress and return to the main menu."""
+    services = context.bot_data["services"]
+    user = update.effective_user
+    if user is None or not is_allowlisted(services.config, user.id):
+        if user:
+            services.db.log_audit(user.id, "access", "/stop", "denied", "not allowlisted")
+        return
+    if not services.db.get_session(user.id)["unlocked"]:
+        await update.effective_message.reply_text(PASSWORD_PROMPT)
+        return
+    services.db.set_step(user.id, None, {})
+    services.db.log_audit(user.id, "stop", "-", "ok", "flow cancelled")
+    await update.effective_message.reply_text(
+        "⏹ Stopped. " + MAIN_MENU_TEXT,
+        reply_markup=main_menu_keyboard(context.bot_data["modules"]))
+
+
 async def noop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer("Bald verfügbar 🚧")
+    await update.callback_query.answer("Coming soon 🚧")
 
 
 async def main_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -88,16 +106,30 @@ async def error_handler(update, context):
     logging.getLogger(__name__).error("Unhandled error", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
         try:
-            await update.effective_message.reply_text("❌ Unerwarteter Fehler — bitte /start.")
+            await update.effective_message.reply_text("❌ Unexpected error — please /start.")
         except Exception:
             pass
 
 
+async def _register_commands(app: Application):
+    """Populate Telegram's "/" command menu (shown when the user types a slash)."""
+    await app.bot.set_my_commands([
+        BotCommand("start", "Unlock / show the main menu"),
+        BotCommand("menu", "Show the main menu"),
+        BotCommand("stop", "Cancel the current action"),
+    ])
+
+
 def build_application(services: Services, modules) -> Application:
-    app = Application.builder().token(services.config.telegram_bot_token).build()
+    app = (Application.builder()
+           .token(services.config.telegram_bot_token)
+           .post_init(_register_commands)
+           .build())
     app.bot_data["services"] = services
     app.bot_data["modules"] = list(modules)
     app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("menu", start_cmd))
+    app.add_handler(CommandHandler("stop", stop_cmd))
     app.add_handler(CallbackQueryHandler(noop_cb, pattern="^noop$"))
     app.add_handler(CallbackQueryHandler(main_menu_cb, pattern="^main:menu$"))
     for mod in modules:

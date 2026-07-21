@@ -27,6 +27,12 @@ These rules come from the project owner and are non-negotiable. They exist becau
 - **State lives in SQLite** (`bot/db.py`: sessions/drafts/audit_log), not in memory — the bot must survive restarts mid-conversation. Only short ids travel in `callback_data` (≤64 bytes); content is looked up in the drafts table.
 - **User/Claude-generated text in Markdown messages must go through `md_escape`** (`bot/modules/blog.py`) — unescaped `*_[` in a title makes Telegram reject the whole message.
 
+## Language split (owner decision, 2026-07-21)
+
+**Bot UI is English; blog content is German.** All button labels, menus, prompts, status and error messages the operator sees in Telegram are English. Everything that ends up on the blog (articles, titles, summaries, tags) and everything passed into the Claude drafting prompts stays German — e.g. the "No specific design" button maps to the German value "kein bestimmtes Design" before it reaches the prompt. Keep new UI strings English and new content strings German.
+
+Commands registered in Telegram's "/" menu: `/start` (unlock / main menu), `/menu` (main menu), `/stop` (cancel current flow — clears the session step). Any new command must be added to `_register_commands` in bot/main.py so it appears in the slash menu, and must be auth-gated like the others.
+
 ## Working practice
 
 - TDD: run `python -m pytest` from the repo root; the suite must stay green and its output pristine.

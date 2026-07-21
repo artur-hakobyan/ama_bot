@@ -51,7 +51,7 @@ async def test_password_flow(services):
     ctx = make_context(services)
     u = make_update(111, "falsch")
     await text_router(u, ctx)
-    assert "Falsches" in u.effective_message.reply_text.await_args.args[0]
+    assert "Wrong" in u.effective_message.reply_text.await_args.args[0]
     u2 = make_update(111, "geheim")
     await text_router(u2, ctx)
     assert services.db.get_session(111)["unlocked"] is True
@@ -83,3 +83,21 @@ async def test_main_menu_cb_clears_lingering_step(services):
 async def test_error_handler_does_not_raise_for_non_update():
     ctx = SimpleNamespace(error=RuntimeError("boom"))
     await error_handler(None, ctx)
+
+
+async def test_stop_clears_step_and_shows_menu(services):
+    from bot.main import stop_cmd
+    services.db.set_unlocked(111, True)
+    services.db.set_step(111, "blog:topic", {"topic": "x"})
+    u = make_update(111, "/stop")
+    await stop_cmd(u, make_context(services))
+    s = services.db.get_session(111)
+    assert s["step"] is None and s["context"] == {}
+    assert "Stopped" in u.effective_message.reply_text.await_args.args[0]
+
+
+async def test_stop_silent_for_stranger(services):
+    from bot.main import stop_cmd
+    u = make_update(999, "/stop")
+    await stop_cmd(u, make_context(services))
+    u.effective_message.reply_text.assert_not_awaited()

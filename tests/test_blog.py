@@ -58,7 +58,7 @@ def test_design_slug_roundtrip():
     assert blog.DESIGNS["jelly"] == "Silent Jelly"
     assert blog.DESIGNS["unberuehrt"] == "Unberührt"
     assert blog.DESIGNS["poppy"] == "Poppy Seed Explosion"
-    assert blog.DESIGNS["none"] == "kein bestimmtes Design"
+    assert blog.DESIGNS["none"] == "No specific design"
 
 
 CFG = Config.load({
@@ -184,4 +184,13 @@ async def test_create_and_preview_without_topic_shows_warning(services):
     await blog.handle_step("blog:must", u, ctx)
     services.claude.draft_article.assert_not_awaited()
     reply = u.effective_message.reply_text
-    assert "Ursprüngliche Angaben" in reply.await_args.args[0]
+    assert "Original inputs" in reply.await_args.args[0]
+
+
+async def test_design_none_stores_german_value_for_claude(services):
+    services.db.set_step(111, None, {"topic": "Dachschräge"})
+    u = make_cb_update("blog:design:none")
+    await blog.callbacks.__wrapped__(u, make_ctx(services))
+    s = services.db.get_session(111)
+    assert s["context"]["design"] == "kein bestimmtes Design"
+    assert s["step"] == "blog:must"

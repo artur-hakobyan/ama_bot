@@ -1,7 +1,7 @@
 import functools
 import hmac
 
-PASSWORD_PROMPT = "🔒 Bitte Passwort eingeben."
+PASSWORD_PROMPT = "🔒 Please enter the password."
 
 
 def is_allowlisted(config, user_id: int) -> bool:
