@@ -56,3 +56,11 @@ def test_urls():
                       client=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500))))
     assert c.admin_url("gid://shopify/Article/123") == "https://dev.myshopify.com/admin/articles/123"
     assert c.live_url("news", "my-post") == "https://dev.myshopify.com/blogs/news/my-post"
+
+
+async def test_transport_error_raises_shopify_error():
+    def responder(request):
+        raise httpx.ConnectError("dns lookup failed")
+    c = make_client(responder)
+    with pytest.raises(ShopifyError, match="nicht erreichbar"):
+        await c.get_article("gid://shopify/Article/1")

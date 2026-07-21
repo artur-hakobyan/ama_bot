@@ -59,9 +59,12 @@ class ShopifyClient:
         self._client = client or httpx.AsyncClient(timeout=30)
 
     async def _execute(self, query: str, variables: dict) -> dict:
-        resp = await self._client.post(
-            self._url, json={"query": query, "variables": variables},
-            headers=self._headers)
+        try:
+            resp = await self._client.post(
+                self._url, json={"query": query, "variables": variables},
+                headers=self._headers)
+        except httpx.HTTPError as e:
+            raise ShopifyError(f"Shopify nicht erreichbar: {e}") from e
         if resp.status_code != 200:
             raise ShopifyError(f"Shopify HTTP {resp.status_code}: {resp.text[:300]}")
         data = resp.json()
