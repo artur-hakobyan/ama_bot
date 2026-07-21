@@ -80,6 +80,9 @@ def services(tmp_path):
         self_check=AsyncMock(return_value={"ok": True, "issues": []}),
         revise_article=AsyncMock(return_value="<p>neu</p>"),
     )
+    shopify.get_article = AsyncMock(return_value={
+        "id": "gid://shopify/Article/5", "title": "Alt", "handle": "alt",
+        "body": "<p>alt</p>", "isPublished": True})
     yield Services(config=CFG, db=db, shopify=shopify, claude=claude)
     db.close()
 
@@ -114,3 +117,41 @@ async def test_full_new_article_flow(services):
     assert reply.await_count >= 1
     kwargs = reply.await_args.kwargs
     assert kwargs.get("reply_markup") is not None
+
+
+def make_cb_update(data):
+    query = SimpleNamespace(data=data, answer=AsyncMock(),
+                            edit_message_text=AsyncMock())
+    msg = SimpleNamespace(text="", reply_text=AsyncMock())
+    return SimpleNamespace(effective_user=SimpleNamespace(id=111),
+                           callback_query=query, effective_message=msg)
+
+
+async def test_list_for_delete_shows_articles(services):
+    services.shopify.list_articles = AsyncMock(return_value=("news", [
+        {"id": "gid://shopify/Article/5", "title": "Alt", "handle": "alt",
+         "isPublished": True, "publishedAt": "2026-01-01"}]))
+    u = make_cb_update("blog:listdel")
+    await blog.callbacks.__wrapped__(u, make_ctx(services))
+    kb = u.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].callback_data == "blog:pickdel:5"
+
+async def test_delete_requires_confirm_then_deletes(services):
+    u = make_cb_update("blog:pickdel:5")
+    await blog.callbacks.__wrapped__(u, make_ctx(services))
+    kb = u.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    assert any(b.callback_data == "blog:confdel:5"
+               for row in kb.inline_keyboard for b in row)
+    services.shopify.delete_article.assert_not_awaited()
+    u2 = make_cb_update("blog:confdel:5")
+    await blog.callbacks.__wrapped__(u2, make_ctx(services))
+    services.shopify.delete_article.assert_awaited_once_with("gid://shopify/Article/5")
+
+async def test_edit_existing_title_flow(services):
+    u = make_cb_update("blog:exttitle:5")
+    await blog.callbacks.__wrapped__(u, make_ctx(services))
+    assert services.db.get_session(111)["step"] == "blog:exttitle"
+    ut = make_text_update("Neuer Titel")
+    await blog.handle_step("blog:exttitle", ut, make_ctx(services))
+    services.shopify.update_article.assert_awaited_with(
+        "gid://shopify/Article/5", {"title": "Neuer Titel"})

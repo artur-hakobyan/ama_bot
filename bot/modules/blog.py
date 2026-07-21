@@ -74,6 +74,21 @@ def design_keyboard() -> InlineKeyboardMarkup:
          for slug, label in DESIGNS.items()])
 
 
+def article_gid(num: str) -> str:
+    return f"gid://shopify/Article/{num}"
+
+
+def article_list_keyboard(articles, action_prefix: str) -> InlineKeyboardMarkup:
+    rows = []
+    for a in articles:
+        num = a["id"].rsplit("/", 1)[-1]
+        mark = "🟢" if a.get("isPublished") else "📝"
+        rows.append([InlineKeyboardButton(
+            f"{mark} {a['title'][:40]}", callback_data=f"blog:{action_prefix}:{num}")])
+    rows.append([InlineKeyboardButton("⬅️ Zurück", callback_data="blog:menu")])
+    return InlineKeyboardMarkup(rows)
+
+
 # --- draft creation flow ----------------------------------------------------
 
 async def _create_and_preview(update, context, answers: dict, user_id: int):
@@ -157,6 +172,33 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
             preview_text(draft, services.shopify.admin_url(draft["shopify_article_gid"]), []),
             reply_markup=preview_keyboard(draft_id), parse_mode="Markdown",
             disable_web_page_preview=True)
+    elif step == "blog:exttitle":
+        gid = ctx.get("article_gid")
+        services.db.set_step(user_id, None, ctx)
+        try:
+            await services.shopify.update_article(gid, {"title": text})
+        except ShopifyError as e:
+            services.db.log_audit(user_id, "article_edit", gid, "error", str(e))
+            await update.effective_message.reply_text(f"❌ Shopify-Fehler: {e}")
+            return
+        services.db.log_audit(user_id, "article_edit", gid, "ok", f"title={text[:80]}")
+        await update.effective_message.reply_text("✅ Titel geändert.",
+                                                  reply_markup=blog_menu_keyboard())
+    elif step == "blog:extbody":
+        gid = ctx.get("article_gid")
+        services.db.set_step(user_id, None, ctx)
+        await update.effective_message.reply_text("✍️ Claude überarbeitet …")
+        try:
+            article = await services.shopify.get_article(gid)
+            new_body = await services.claude.revise_article(article["body"], text)
+            await services.shopify.update_article(gid, {"body": new_body})
+        except (ClaudeError, ShopifyError) as e:
+            services.db.log_audit(user_id, "article_edit", gid, "error", str(e))
+            await update.effective_message.reply_text(f"❌ Fehler: {e}")
+            return
+        services.db.log_audit(user_id, "article_edit", gid, "ok", text[:200])
+        await update.effective_message.reply_text("✅ Artikel überarbeitet.",
+                                                  reply_markup=blog_menu_keyboard())
 
 
 # --- callbacks ---------------------------------------------------------------
@@ -187,6 +229,68 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         services.db.set_step(user_id, "blog:must", ctx)
         await query.edit_message_text(
             "3/3 — Was muss unbedingt rein? („-“ für nichts)")
+        return
+
+    if action in ("listedit", "listdel"):
+        try:
+            _, articles = await services.shopify.list_articles(
+                services.config.blog_id, first=10)
+        except ShopifyError as e:
+            await query.edit_message_text(f"❌ Shopify-Fehler: {e}")
+            return
+        if not articles:
+            await query.edit_message_text("Keine Artikel gefunden.",
+                                          reply_markup=blog_menu_keyboard())
+            return
+        prefix = "pickedit" if action == "listedit" else "pickdel"
+        verb = "bearbeiten" if action == "listedit" else "löschen"
+        await query.edit_message_text(f"Welchen Artikel {verb}?",
+                                      reply_markup=article_list_keyboard(articles, prefix))
+        return
+
+    if action == "pickedit":
+        await query.edit_message_text(
+            "Was ändern?",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Titel ändern",
+                                      callback_data=f"blog:exttitle:{arg}")],
+                [InlineKeyboardButton("Mit Claude überarbeiten",
+                                      callback_data=f"blog:extbody:{arg}")],
+                [InlineKeyboardButton("⬅️ Zurück", callback_data="blog:listedit")],
+            ]))
+        return
+
+    if action in ("exttitle", "extbody"):
+        session = services.db.get_session(user_id)
+        ctx = session["context"]
+        ctx["article_gid"] = article_gid(arg)
+        services.db.set_step(user_id, f"blog:{action}", ctx)
+        prompt = ("✏️ Neuer Titel?" if action == "exttitle"
+                  else "✏️ Was soll Claude ändern? (freie Anweisung)")
+        await query.edit_message_text(prompt)
+        return
+
+    if action == "pickdel":
+        await query.edit_message_text(
+            "⚠️ Wirklich löschen? Das kann nicht rückgängig gemacht werden.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗑 Ja, endgültig löschen",
+                                      callback_data=f"blog:confdel:{arg}")],
+                [InlineKeyboardButton("⬅️ Abbrechen", callback_data="blog:listdel")],
+            ]))
+        return
+
+    if action == "confdel":
+        gid = article_gid(arg)
+        try:
+            await services.shopify.delete_article(gid)
+        except ShopifyError as e:
+            services.db.log_audit(user_id, "article_delete", gid, "error", str(e))
+            await query.edit_message_text(f"❌ Shopify-Fehler: {e}")
+            return
+        services.db.log_audit(user_id, "article_delete", gid, "ok", "")
+        await query.edit_message_text("🗑 Artikel gelöscht.",
+                                      reply_markup=blog_menu_keyboard())
         return
 
     # --- draft actions: arg is the draft id ---
