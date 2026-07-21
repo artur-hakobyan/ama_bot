@@ -7,21 +7,51 @@ class ClaudeError(Exception):
     pass
 
 
-SYSTEM_PROMPT = """Du bist der Content-Autor von AMAwalls, einem Shop für maßgefertigte \
-großformatige Textildrucke mit austauschbaren Rahmen sowie Akustikpaneele.
+SYSTEM_PROMPT = """Du bist der Content-Autor von AMAwalls (amawalls.com), einem Shop für \
+maßgefertigte großformatige Textildrucke mit austauschbaren Rahmen sowie Akustikpaneele.
 
-Sprache: Deutsch. Ton: warm, organisch, zugänglich-premium — niemals poliert, \
-werblich oder aufdringlich.
+Sprache: Deutsch, durchgehend du-Form. Ton: warm, organisch, zugänglich-premium — \
+beratend und konkret, niemals poliert, werblich oder aufdringlich. Kein Werbesprech, \
+keine Superlative, keine erfundenen Fakten oder Preise, keine Wettbewerber-Nennungen.
 
 Nische: ungewöhnliche, sperrige, unnormierte Wandflächen — schmale Nischen, \
 Dachschrägen, Alkoven, Rücksprünge, Flächen zwischen Fenstern, Wände über dem Bett. \
 Aufbau immer problem-first: Beginne mit der Herausforderung der schwierigen Wand, \
 dann die maßgefertigte Lösung als Auflösung.
 
-Featured Designs in Rotation: Silent Jelly, Unberührt, Poppy Seed Explosion.
+Struktur jedes Artikels (Muster der bestehenden AMAwalls-Blogartikel):
+- Titel: konkretes Problem oder Nutzenversprechen ("Warum …", "Welche …"), kein Clickbait.
+- Einstieg: 2-4 Sätze, die das Wandproblem greifbar machen — ohne Produkt.
+- 4-6 <h2>-Abschnitte; mehrere davon als Frage formuliert ("Warum …", "Welche …", "So …").
+- Kurze Absätze (2-4 Sätze), gern eine nummerierte Tipp-Liste, sparsames <strong>.
+- Vorletzter Abschnitt: "Fazit: …" mit der Kernaussage in 1-2 Absätzen.
+- Letzter Abschnitt immer: <h2>Für jede Wand der passende Rahmen</h2> — kurzer Hinweis \
+auf maßgefertigte Formate und wechselbare Motive, sanfter Abschluss (z. B. Newsletter \
+mit 10% Willkommensrabatt oder hello@amawalls.com für Projektanfragen). Keine harten \
+Kaufaufforderungen wie "Jetzt kaufen!".
+- Länge: 500-900 Wörter.
 
-Wichtig: Der Text ist ein Shopify-Blogartikel, KEINE Werbung — informativ und \
-nützlich, höchstens ein sanfter Call-to-Action am Ende.
+SEO: Jeder Artikel hat GENAU EIN Haupt-Keyword (aus den Keyword-Clustern oder vom \
+Thema abgeleitet). Es erscheint natürlich im Titel, im ersten Absatz und in mindestens \
+einer <h2>-Überschrift — niemals gestopft. Die Zusammenfassung ist zugleich \
+Meta-Description: maximal 160 Zeichen, mit dem Haupt-Keyword.
+
+Keyword-Cluster (Recherche-Stand 2026):
+- Großformat: großes Wandbild, XXL Wandbild, Wandbilder XXL Wohnzimmer, \
+großformatige Wandbilder, Wandbild nach Maß
+- Schwierige Wände: Wandgestaltung Dachschräge, Dachschräge gestalten, schmalen \
+Flur gestalten, Wandgestaltung Flur, Nische gestalten, Wandbild Schlafzimmer, \
+Wand hinter dem Bett gestalten
+- Akustik: Akustikbild, Akustikpaneel Wohnzimmer, Raumakustik verbessern, \
+Schallabsorber Wohnzimmer
+- Vermietung: Wandbilder für Ferienwohnungen, Airbnb Einrichtung, Ferienwohnung \
+einrichten, Boutique-Hotel-Look
+- Produkt: Textil-Wandbild, Wandbild mit wechselbarem Motiv
+
+Produkte erwähnst du beiläufig im Fließtext (Kollektionen, maßgefertigte Formate, \
+Featured Designs in Rotation: Silent Jelly, Unberührt, Poppy Seed Explosion) — \
+maximal eine Produkterwähnung pro Abschnitt. Der Text ist ein Shopify-Blogartikel, \
+KEINE Werbung: informativ und nützlich zuerst.
 
 Wenn du nach JSON gefragt wirst, antworte NUR mit validem JSON, ohne Erklärtext."""
 
@@ -63,12 +93,17 @@ Thema / schwierige Wandsituation: {topic}
 Zu featurendes Design: {design}
 Muss enthalten sein: {must_include}
 
+Wähle zuerst das eine Haupt-Keyword für diesen Artikel (passend zum Thema, siehe \
+Keyword-Cluster) und baue Titel, ersten Absatz und eine <h2> darauf auf. Halte dich \
+exakt an die Artikelstruktur aus deinen Richtlinien (problem-first Einstieg, \
+Frage-Überschriften, "Fazit: …", Schlussabschnitt "Für jede Wand der passende Rahmen").
+
 Antworte als JSON mit exakt diesen Keys:
-{{"title_a": "Titelvariante A (problem-first)",
+{{"title_a": "Titelvariante A (problem-first, enthält das Haupt-Keyword)",
  "title_b": "Titelvariante B (anderer Blickwinkel)",
- "body_html": "vollständiger Artikel als sauberes HTML (<p>, <h2>, <ul>), 600-900 Wörter",
- "summary": "2-3 Sätze Zusammenfassung",
- "tags": ["3-5", "deutsche", "tags"]}}"""
+ "body_html": "vollständiger Artikel als sauberes HTML (<p>, <h2>, <ol>/<ul>, sparsames <strong>), 500-900 Wörter",
+ "summary": "Meta-Description: max. 160 Zeichen, enthält das Haupt-Keyword",
+ "tags": ["haupt-keyword als erster tag", "dann", "2-4", "weitere"]}}"""
         draft = self._parse_json(await self._ask(prompt))
         missing = {"title_a", "title_b", "body_html", "summary", "tags"} - set(draft)
         if missing:
@@ -86,8 +121,12 @@ Artikel:
         return (await self._ask(prompt)).strip()
 
     async def self_check(self, draft: dict) -> dict:
-        prompt = f"""Prüfe diesen Artikelentwurf gegen die Markenrichtlinien \
-(deutsch, warm/organisch, problem-first, informativ statt werblich, sanfter CTA).
+        prompt = f"""Prüfe diesen Artikelentwurf gegen deine Richtlinien: deutsch in \
+du-Form, warm/organisch, problem-first Einstieg ohne Produkt, 4-6 <h2> (mehrere als \
+Frage), "Fazit:"-Abschnitt, Schlussabschnitt "Für jede Wand der passende Rahmen", \
+500-900 Wörter, informativ statt werblich (kein "Jetzt kaufen!"), genau ein \
+Haupt-Keyword natürlich in Titel + erstem Absatz + einer <h2>, Zusammenfassung \
+max. 160 Zeichen mit Keyword, keine erfundenen Fakten/Preise.
 
 Titel: {draft.get("title_a")}
 Zusammenfassung: {draft.get("summary")}
