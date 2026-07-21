@@ -31,3 +31,9 @@ def test_bad_allowlist():
 def test_webhook_requires_url():
     with pytest.raises(ConfigError):
         Config.load({**VALID_ENV, "TRANSPORT": "webhook"})
+
+
+def test_shopify_enabled_flag():
+    assert Config.load(VALID_ENV).shopify_enabled is True
+    assert Config.load({**VALID_ENV, "SHOPIFY_ENABLED": "false"}).shopify_enabled is False
+    assert Config.load({**VALID_ENV, "SHOPIFY_ENABLED": "0"}).shopify_enabled is False

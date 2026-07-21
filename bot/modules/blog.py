@@ -1,4 +1,6 @@
+import html as html_lib
 import logging
+from html.parser import HTMLParser
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
@@ -40,20 +42,93 @@ def md_escape(text: str) -> str:
     return text
 
 
-def preview_text(draft: dict, admin_url: str, issues: list) -> str:
+def preview_text(draft: dict, admin_url, issues: list) -> str:
     lines = [
         f"📄 *{md_escape(chosen_title(draft))}*",
         "",
         md_escape(draft["summary"] or ""),
         "",
         f"Tags: {md_escape(', '.join(draft['tags']))}" if draft["tags"] else "",
-        f"Admin: {admin_url}",
+        f"Admin: {admin_url}" if admin_url else "",
         "",
-        "Status: draft (unpublished)",
+        "Status: draft (unpublished)" if admin_url
+        else "Status: local draft — Shopify not connected yet",
     ]
     if issues:
         lines += ["", "⚠️ Self-check:"] + [f"• {md_escape(i)}" for i in issues]
     return "\n".join(line for line in lines if line is not None)
+
+
+class _TelegramHTML(HTMLParser):
+    """Convert article HTML (<p>, <h2>, <ul>/<ol>, <strong>…) to Telegram-safe HTML."""
+
+    def __init__(self):
+        super().__init__()
+        self.out = []
+        self._ol_index = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("h1", "h2", "h3", "h4"):
+            self.out.append("\n\n<b>")
+        elif tag == "p":
+            self.out.append("\n\n")
+        elif tag in ("strong", "b"):
+            self.out.append("<b>")
+        elif tag in ("em", "i"):
+            self.out.append("<i>")
+        elif tag == "ol":
+            self._ol_index = 1
+        elif tag == "li":
+            if self._ol_index is None:
+                self.out.append("\n• ")
+            else:
+                self.out.append(f"\n{self._ol_index}. ")
+                self._ol_index += 1
+        elif tag == "br":
+            self.out.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("h1", "h2", "h3", "h4"):
+            self.out.append("</b>\n")
+        elif tag in ("strong", "b"):
+            self.out.append("</b>")
+        elif tag in ("em", "i"):
+            self.out.append("</i>")
+        elif tag == "ol":
+            self._ol_index = None
+
+    def handle_data(self, data):
+        self.out.append(html_lib.escape(data))
+
+
+def html_to_telegram(body_html: str) -> str:
+    parser = _TelegramHTML()
+    parser.feed(body_html)
+    text = "".join(parser.out)
+    text = "\n".join(line.rstrip() for line in text.split("\n"))
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+    return text.strip()
+
+
+def chunk_text(text: str, limit: int = 3900) -> list:
+    """Split on paragraph boundaries to stay under Telegram's 4096-char cap."""
+    chunks = []
+    while len(text) > limit:
+        cut = text.rfind("\n\n", 0, limit)
+        if cut < limit // 2:
+            cut = limit
+        chunks.append(text[:cut])
+        text = text[cut:].lstrip("\n")
+    if text:
+        chunks.append(text)
+    return chunks
+
+
+async def _send_article_body(msg, body_html: str):
+    for chunk in chunk_text(html_to_telegram(body_html)):
+        await msg.reply_text(chunk, parse_mode="HTML",
+                             disable_web_page_preview=True)
 
 
 def preview_keyboard(draft_id: str) -> InlineKeyboardMarkup:
@@ -121,21 +196,29 @@ async def _create_and_preview(update, context, answers: dict, user_id: int):
     draft_id = services.db.create_draft(
         user_id, draft_data["title_a"], draft_data["title_b"],
         draft_data["body_html"], draft_data["summary"], draft_data["tags"])
-    try:
-        article = await services.shopify.create_article(
-            services.config.blog_id, draft_data["title_a"], draft_data["body_html"],
-            draft_data["summary"], draft_data["tags"], services.config.author_name)
-    except ShopifyError as e:
-        services.db.delete_draft(draft_id)
-        services.db.log_audit(user_id, "article_create", "-", "error", str(e))
-        await msg.reply_text(f"❌ Shopify error: {e}")
-        return
-    services.db.update_draft(draft_id, shopify_article_gid=article["id"])
-    services.db.log_audit(user_id, "article_create", article["id"], "ok",
-                          f"draft {draft_id}")
+    if services.config.shopify_enabled:
+        try:
+            article = await services.shopify.create_article(
+                services.config.blog_id, draft_data["title_a"], draft_data["body_html"],
+                draft_data["summary"], draft_data["tags"], services.config.author_name)
+        except ShopifyError as e:
+            services.db.delete_draft(draft_id)
+            services.db.log_audit(user_id, "article_create", "-", "error", str(e))
+            await msg.reply_text(f"❌ Shopify error: {e}")
+            return
+        services.db.update_draft(draft_id, shopify_article_gid=article["id"])
+        services.db.log_audit(user_id, "article_create", article["id"], "ok",
+                              f"draft {draft_id}")
+        admin_url = services.shopify.admin_url(article["id"])
+    else:
+        services.db.log_audit(user_id, "article_create", "-", "ok",
+                              f"draft {draft_id} (local only, Shopify off)")
+        admin_url = None
     draft = services.db.get_draft(draft_id)
+    if admin_url is None:
+        await _send_article_body(msg, draft["body_html"])
     await msg.reply_text(
-        preview_text(draft, services.shopify.admin_url(article["id"]), check["issues"]),
+        preview_text(draft, admin_url, check["issues"]),
         reply_markup=preview_keyboard(draft_id), parse_mode="Markdown",
         disable_web_page_preview=True)
 
@@ -169,21 +252,23 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
                 reply_markup=blog_menu_keyboard())
             return
         await update.effective_message.reply_text("✍️ Claude is revising …")
+        gid = draft.get("shopify_article_gid")
         try:
             new_body = await services.claude.revise_article(draft["body_html"], text)
-            await services.shopify.update_article(
-                draft["shopify_article_gid"], {"body": new_body})
+            if gid:
+                await services.shopify.update_article(gid, {"body": new_body})
         except (ClaudeError, ShopifyError) as e:
-            services.db.log_audit(user_id, "article_edit",
-                                  draft["shopify_article_gid"], "error", str(e))
+            services.db.log_audit(user_id, "article_edit", gid or "-", "error", str(e))
             await update.effective_message.reply_text(f"❌ Error: {e}")
             return
         services.db.update_draft(draft_id, body_html=new_body)
-        services.db.log_audit(user_id, "article_edit",
-                              draft["shopify_article_gid"], "ok", text[:200])
+        services.db.log_audit(user_id, "article_edit", gid or "-", "ok", text[:200])
         draft = services.db.get_draft(draft_id)
+        admin_url = services.shopify.admin_url(gid) if gid else None
+        if admin_url is None:
+            await _send_article_body(update.effective_message, draft["body_html"])
         await update.effective_message.reply_text(
-            preview_text(draft, services.shopify.admin_url(draft["shopify_article_gid"]), []),
+            preview_text(draft, admin_url, []),
             reply_markup=preview_keyboard(draft_id), parse_mode="Markdown",
             disable_web_page_preview=True)
     elif step == "blog:exttitle":
@@ -252,6 +337,12 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if action in ("listedit", "listdel"):
+        if not services.config.shopify_enabled:
+            await query.edit_message_text(
+                "📦 Shopify integration will be ready soon — managing existing "
+                "store articles will be available then.",
+                reply_markup=blog_menu_keyboard())
+            return
         try:
             _, articles = await services.shopify.list_articles(
                 services.config.blog_id, first=10)
@@ -316,13 +407,21 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- draft actions: arg is the draft id ---
     draft = services.db.get_draft(arg) if arg else None
     if action in ("pub", "regen", "title", "editdraft", "discard"):
-        if draft is None or not draft.get("shopify_article_gid"):
+        if draft is None or (services.config.shopify_enabled
+                             and not draft.get("shopify_article_gid")):
             await query.edit_message_text("⚠️ This draft no longer exists.",
                                           reply_markup=blog_menu_keyboard())
             return
-        gid = draft["shopify_article_gid"]
+        gid = draft.get("shopify_article_gid")
 
     if action == "pub":
+        if not gid:
+            services.db.log_audit(user_id, "publish", "-", "skipped", "Shopify off")
+            await update.effective_message.reply_text(
+                "📦 Shopify integration will be ready soon — this article will "
+                "be published to the store then. For now it stays saved as a "
+                "local draft.")
+            return
         try:
             title = chosen_title(draft)
             if title != draft["title_a"]:
@@ -352,14 +451,15 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⚠️ Original inputs are missing — please start over.",
                 reply_markup=blog_menu_keyboard())
             return
-        try:
-            await services.shopify.delete_article(gid)
-        except ShopifyError as e:
-            services.db.log_audit(user_id, "regen", gid, "error", str(e))
-            await query.edit_message_text(f"❌ Shopify error: {e}")
-            return
+        if gid:
+            try:
+                await services.shopify.delete_article(gid)
+            except ShopifyError as e:
+                services.db.log_audit(user_id, "regen", gid, "error", str(e))
+                await query.edit_message_text(f"❌ Shopify error: {e}")
+                return
         services.db.delete_draft(arg)
-        services.db.log_audit(user_id, "regen", gid, "ok", "old draft deleted")
+        services.db.log_audit(user_id, "regen", gid or "-", "ok", "old draft deleted")
         await query.edit_message_text("🔄 Old draft deleted.")
         await _create_and_preview(update, context, answers, user_id)
 
@@ -367,14 +467,15 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_choice = "b" if draft["chosen_title"] == "a" else "a"
         services.db.update_draft(arg, chosen_title=new_choice)
         draft = services.db.get_draft(arg)
-        try:
-            await services.shopify.update_article(gid, {"title": chosen_title(draft)})
-        except ShopifyError as e:
-            await query.edit_message_text(f"❌ Shopify error: {e}")
-            return
-        services.db.log_audit(user_id, "title_toggle", gid, "ok", new_choice)
+        if gid:
+            try:
+                await services.shopify.update_article(gid, {"title": chosen_title(draft)})
+            except ShopifyError as e:
+                await query.edit_message_text(f"❌ Shopify error: {e}")
+                return
+        services.db.log_audit(user_id, "title_toggle", gid or "-", "ok", new_choice)
         await query.edit_message_text(
-            preview_text(draft, services.shopify.admin_url(gid), []),
+            preview_text(draft, services.shopify.admin_url(gid) if gid else None, []),
             reply_markup=preview_keyboard(arg), parse_mode="Markdown",
             disable_web_page_preview=True)
 
@@ -387,14 +488,15 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✏️ What should Claude change? (free-form instruction)")
 
     elif action == "discard":
-        try:
-            await services.shopify.delete_article(gid)
-        except ShopifyError as e:
-            services.db.log_audit(user_id, "discard", gid, "error", str(e))
-            await query.edit_message_text(f"❌ Shopify error: {e}")
-            return
+        if gid:
+            try:
+                await services.shopify.delete_article(gid)
+            except ShopifyError as e:
+                services.db.log_audit(user_id, "discard", gid, "error", str(e))
+                await query.edit_message_text(f"❌ Shopify error: {e}")
+                return
         services.db.delete_draft(arg)
-        services.db.log_audit(user_id, "discard", gid, "ok", "")
+        services.db.log_audit(user_id, "discard", gid or "-", "ok", "")
         await query.edit_message_text("🗑 Draft discarded.",
                                       reply_markup=blog_menu_keyboard())
 

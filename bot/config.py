@@ -31,6 +31,7 @@ class Config:
     claude_model: str
     db_path: str
     author_name: str
+    shopify_enabled: bool
 
     @classmethod
     def load(cls, env: Mapping = os.environ) -> "Config":
@@ -64,4 +65,6 @@ class Config:
             claude_model=env.get("CLAUDE_MODEL") or "claude-sonnet-5",
             db_path=env.get("DB_PATH") or "amma_bot.db",
             author_name=env.get("AUTHOR_NAME") or "AMAwalls Team",
+            shopify_enabled=(env.get("SHOPIFY_ENABLED") or "true").strip().lower()
+            not in ("false", "0", "no"),
         )

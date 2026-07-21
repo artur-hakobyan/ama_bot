@@ -194,3 +194,55 @@ async def test_design_none_stores_german_value_for_claude(services):
     s = services.db.get_session(111)
     assert s["context"]["design"] == "kein bestimmtes Design"
     assert s["step"] == "blog:must"
+
+
+def test_html_to_telegram_structure():
+    html = ('<h2>Warum große Bilder?</h2><p>Ein <strong>ruhiger</strong> Raum '
+            '&amp; mehr.</p><ul><li>Punkt eins</li><li>Punkt zwei</li></ul>')
+    out = blog.html_to_telegram(html)
+    assert "<b>Warum große Bilder?</b>" in out
+    assert "<b>ruhiger</b>" in out
+    assert "&amp; mehr." in out
+    assert "• Punkt eins" in out and "• Punkt zwei" in out
+    assert "<p>" not in out and "<ul>" not in out
+
+
+def test_chunk_text_splits_on_paragraphs():
+    text = "\n\n".join(f"Absatz {i} " + "x" * 100 for i in range(80))
+    chunks = blog.chunk_text(text, limit=1000)
+    assert all(len(c) <= 1000 for c in chunks)
+    assert "".join(c.replace("\n", "") for c in chunks).count("Absatz") == 80
+
+
+async def test_demo_mode_skips_shopify_and_sends_article(services):
+    import dataclasses
+    services.config = dataclasses.replace(CFG, shopify_enabled=False)
+    ctx = make_ctx(services)
+    services.db.set_step(111, "blog:must", {"topic": "Dachschräge", "design": "Silent Jelly"})
+    u = make_text_update("-")
+    await blog.handle_step("blog:must", u, ctx)
+    services.shopify.create_article.assert_not_awaited()
+    texts = [c.args[0] for c in u.effective_message.reply_text.await_args_list]
+    assert any("Shopify not connected" in t for t in texts)  # preview status line
+    assert any("<b>" in t or "x" in t or len(t) > 100 for t in texts)  # article body sent
+
+
+async def test_demo_mode_publish_says_coming_soon(services):
+    import dataclasses
+    services.config = dataclasses.replace(CFG, shopify_enabled=False)
+    did = services.db.create_draft(111, "TA", "TB", "<p>x</p>", "s", [])
+    u = make_cb_update(f"blog:pub:{did}")
+    await blog.callbacks.__wrapped__(u, make_ctx(services))
+    services.shopify.publish_article.assert_not_awaited()
+    reply = u.effective_message.reply_text.await_args.args[0]
+    assert "ready soon" in reply
+    assert services.db.get_draft(did) is not None  # draft kept
+
+
+async def test_demo_mode_list_existing_says_coming_soon(services):
+    import dataclasses
+    services.config = dataclasses.replace(CFG, shopify_enabled=False)
+    u = make_cb_update("blog:listedit")
+    await blog.callbacks.__wrapped__(u, make_ctx(services))
+    services.shopify.list_articles.assert_not_awaited()
+    assert "ready soon" in u.callback_query.edit_message_text.await_args.args[0]
