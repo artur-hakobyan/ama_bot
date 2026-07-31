@@ -82,7 +82,10 @@ CHECK_SCHEMA = {
 
 class ClaudeClient:
     def __init__(self, api_key: str, model: str, client=None):
-        self._client = client or AsyncAnthropic(api_key=api_key)
+        # Long articles need a generous timeout; retries cover transient
+        # network drops (laptop sleep, wifi switch) rather than failing the flow.
+        self._client = client or AsyncAnthropic(
+            api_key=api_key, timeout=180.0, max_retries=4)
         self._model = model
 
     async def _ask(self, prompt: str, max_tokens: int = 4096,

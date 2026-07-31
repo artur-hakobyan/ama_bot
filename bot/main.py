@@ -2,6 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 from telegram import BotCommand, Update
+from telegram.error import NetworkError
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
@@ -79,10 +80,17 @@ async def main_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def error_handler(update, context):
-    logging.getLogger(__name__).error("Unhandled error", exc_info=context.error)
+    err = context.error
+    # Polling drops (laptop sleep, wifi switch, VPN) are transient and
+    # self-healing: log one line, don't spam the chat or a stack trace.
+    if isinstance(err, NetworkError):
+        logging.getLogger(__name__).warning("Network hiccup: %s", err)
+        return
+    logging.getLogger(__name__).error("Unhandled error", exc_info=err)
     if isinstance(update, Update) and update.effective_message:
         try:
-            await update.effective_message.reply_text("❌ Unexpected error — please /start.")
+            await update.effective_message.reply_text(
+                "❌ Unexpected error — please try again, or /start to reset.")
         except Exception:
             pass
 
