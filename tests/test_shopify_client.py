@@ -64,3 +64,36 @@ async def test_transport_error_raises_shopify_error():
     c = make_client(responder)
     with pytest.raises(ShopifyError, match="nicht erreichbar"):
         await c.get_article("gid://shopify/Article/1")
+
+
+async def test_client_credentials_token_fetch_and_cache():
+    calls = {"token": 0, "gql": 0}
+
+    def responder(request):
+        if request.url.path.endswith("/admin/oauth/access_token"):
+            calls["token"] += 1
+            body = request.content.decode()
+            assert "grant_type=client_credentials" in body
+            assert "client_id=cid" in body and "client_secret=csec" in body
+            return httpx.Response(200, json={"access_token": "shpat_fresh",
+                                             "scope": "write_content",
+                                             "expires_in": 86399})
+        calls["gql"] += 1
+        assert request.headers["x-shopify-access-token"] == "shpat_fresh"
+        return httpx.Response(200, json={"data": {"blog": {"handle": "news", "articles": {"nodes": []}}}})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(responder))
+    c = ShopifyClient("dev.myshopify.com", "", "2026-07", client=http,
+                      client_id="cid", client_secret="csec")
+    await c.list_articles("gid://shopify/Blog/9")
+    await c.list_articles("gid://shopify/Blog/9")
+    assert calls["token"] == 1 and calls["gql"] == 2  # token cached across calls
+
+
+async def test_static_token_skips_oauth():
+    def responder(request):
+        assert "oauth" not in str(request.url)
+        assert request.headers["x-shopify-access-token"] == "tok"
+        return httpx.Response(200, json={"data": {"blog": {"handle": "n", "articles": {"nodes": []}}}})
+    c = make_client(responder)
+    await c.list_articles("gid://shopify/Blog/9")

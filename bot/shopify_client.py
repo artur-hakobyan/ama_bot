@@ -1,3 +1,5 @@
+import time
+
 import httpx
 
 
@@ -42,7 +44,7 @@ LIST_ARTICLES = f"""
 query ListArticles($blogId: ID!, $first: Int!) {{
   blog(id: $blogId) {{
     handle
-    articles(first: $first, sortKey: UPDATED_AT, reverse: true) {{
+    articles(first: $first, reverse: true) {{
       nodes {{ {ARTICLE_FIELDS} publishedAt }}
     }}
   }}
@@ -51,18 +53,49 @@ query ListArticles($blogId: ID!, $first: Int!) {{
 
 class ShopifyClient:
     def __init__(self, domain: str, token: str, version: str,
-                 client: httpx.AsyncClient | None = None):
+                 client: httpx.AsyncClient | None = None,
+                 client_id: str = "", client_secret: str = ""):
         self._domain = domain
         self._url = f"https://{domain}/admin/api/{version}/graphql.json"
-        self._headers = {"X-Shopify-Access-Token": token,
-                         "Content-Type": "application/json"}
+        self._token = token
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._token_expires_at = 0.0
         self._client = client or httpx.AsyncClient(timeout=30)
 
+    async def _access_token(self) -> str:
+        """Static token if configured, else a cached client-credentials token.
+
+        Dev Dashboard apps have no permanent token: exchange client id/secret
+        for a 24h token and refresh a minute before it expires.
+        """
+        if self._token:
+            return self._token
+        if time.time() < self._token_expires_at - 60:
+            return self._cached_token
+        try:
+            resp = await self._client.post(
+                f"https://{self._domain}/admin/oauth/access_token",
+                data={"grant_type": "client_credentials",
+                      "client_id": self._client_id,
+                      "client_secret": self._client_secret})
+        except httpx.HTTPError as e:
+            raise ShopifyError(f"Shopify token request failed: {e}") from e
+        if resp.status_code != 200:
+            raise ShopifyError(
+                f"Shopify token HTTP {resp.status_code}: {resp.text[:300]}")
+        payload = resp.json()
+        self._cached_token = payload["access_token"]
+        self._token_expires_at = time.time() + float(payload.get("expires_in", 86399))
+        return self._cached_token
+
     async def _execute(self, query: str, variables: dict) -> dict:
+        headers = {"X-Shopify-Access-Token": await self._access_token(),
+                   "Content-Type": "application/json"}
         try:
             resp = await self._client.post(
                 self._url, json={"query": query, "variables": variables},
-                headers=self._headers)
+                headers=headers)
         except httpx.HTTPError as e:
             raise ShopifyError(f"Shopify nicht erreichbar: {e}") from e
         if resp.status_code != 200:

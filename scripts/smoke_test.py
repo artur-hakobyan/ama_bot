@@ -23,7 +23,9 @@ async def main() -> int:
         return 1
 
     shopify = ShopifyClient(cfg.shopify_store_domain, cfg.shopify_admin_token,
-                            cfg.shopify_api_version)
+                            cfg.shopify_api_version,
+                            client_id=cfg.shopify_client_id,
+                            client_secret=cfg.shopify_client_secret)
     print(f"Store: {cfg.shopify_store_domain}  Blog: {cfg.blog_id}")
 
     try:

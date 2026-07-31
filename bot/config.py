@@ -9,7 +9,7 @@ class ConfigError(Exception):
 
 REQUIRED_KEYS = [
     "TELEGRAM_BOT_TOKEN", "ALLOWLIST_USER_IDS",
-    "ANTHROPIC_API_KEY", "SHOPIFY_STORE_DOMAIN", "SHOPIFY_ADMIN_TOKEN",
+    "ANTHROPIC_API_KEY", "SHOPIFY_STORE_DOMAIN",
     "SHOPIFY_API_VERSION", "BLOG_ID",
 ]
 
@@ -31,6 +31,8 @@ class Config:
     db_path: str
     author_name: str
     shopify_enabled: bool
+    shopify_client_id: str
+    shopify_client_secret: str
 
     @classmethod
     def load(cls, env: Mapping = os.environ) -> "Config":
@@ -48,12 +50,19 @@ class Config:
             raise ConfigError("TRANSPORT must be 'polling' or 'webhook'")
         if transport == "webhook" and not env.get("WEBHOOK_URL"):
             raise ConfigError("WEBHOOK_URL is required when TRANSPORT=webhook")
+        has_static_token = bool(env.get("SHOPIFY_ADMIN_TOKEN"))
+        has_client_creds = bool(env.get("SHOPIFY_CLIENT_ID")) and bool(
+            env.get("SHOPIFY_CLIENT_SECRET"))
+        if not has_static_token and not has_client_creds:
+            raise ConfigError(
+                "Provide SHOPIFY_ADMIN_TOKEN, or SHOPIFY_CLIENT_ID + "
+                "SHOPIFY_CLIENT_SECRET (Dev Dashboard app credentials)")
         return cls(
             telegram_bot_token=env["TELEGRAM_BOT_TOKEN"],
             allowlist_user_ids=ids,
             anthropic_api_key=env["ANTHROPIC_API_KEY"],
             shopify_store_domain=env["SHOPIFY_STORE_DOMAIN"],
-            shopify_admin_token=env["SHOPIFY_ADMIN_TOKEN"],
+            shopify_admin_token=env.get("SHOPIFY_ADMIN_TOKEN") or "",
             shopify_api_version=env["SHOPIFY_API_VERSION"],
             blog_id=env["BLOG_ID"],
             content_lang=env.get("CONTENT_LANG") or "de",
@@ -65,4 +74,6 @@ class Config:
             author_name=env.get("AUTHOR_NAME") or "AMAwalls Team",
             shopify_enabled=(env.get("SHOPIFY_ENABLED") or "true").strip().lower()
             not in ("false", "0", "no"),
+            shopify_client_id=env.get("SHOPIFY_CLIENT_ID") or "",
+            shopify_client_secret=env.get("SHOPIFY_CLIENT_SECRET") or "",
         )

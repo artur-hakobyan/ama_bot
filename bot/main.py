@@ -122,7 +122,9 @@ def main():
         config=cfg,
         db=Database(cfg.db_path),
         shopify=ShopifyClient(cfg.shopify_store_domain, cfg.shopify_admin_token,
-                              cfg.shopify_api_version),
+                              cfg.shopify_api_version,
+                              client_id=cfg.shopify_client_id,
+                              client_secret=cfg.shopify_client_secret),
         claude=ClaudeClient(cfg.anthropic_api_key, cfg.claude_model),
     )
     app = build_application(services, modules=[blog])
