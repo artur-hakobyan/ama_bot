@@ -6,7 +6,11 @@ from bot.claude_client import ClaudeClient, ClaudeError
 
 
 def fake_anthropic(text=None, side_effect=None):
-    resp = SimpleNamespace(content=[SimpleNamespace(text=text or "")])
+    # Real responses may lead with a thinking block, so blocks carry a type.
+    resp = SimpleNamespace(content=[
+        SimpleNamespace(type="thinking", thinking=""),
+        SimpleNamespace(type="text", text=text or ""),
+    ])
     create = AsyncMock(return_value=resp, side_effect=side_effect)
     return SimpleNamespace(messages=SimpleNamespace(create=create)), create
 
