@@ -31,6 +31,8 @@ class Config:
     db_path: str
     author_name: str
     shopify_enabled: bool
+    keyword_sheet_path: str
+    house_rules_path: str
     shopify_client_id: str
     shopify_client_secret: str
 
@@ -74,6 +76,9 @@ class Config:
             author_name=env.get("AUTHOR_NAME") or "AMAwalls Team",
             shopify_enabled=(env.get("SHOPIFY_ENABLED") or "true").strip().lower()
             not in ("false", "0", "no"),
+            keyword_sheet_path=env.get("KEYWORD_SHEET_PATH")
+            or "docs/source/Keyword Pillar Topics - Akustikbilder Blog.xlsx",
+            house_rules_path=env.get("HOUSE_RULES_PATH") or "house_rules.json",
             shopify_client_id=env.get("SHOPIFY_CLIENT_ID") or "",
             shopify_client_secret=env.get("SHOPIFY_CLIENT_SECRET") or "",
         )

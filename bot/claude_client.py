@@ -507,3 +507,39 @@ summary, tags)."""
             findings = style_check.check(draft.get("body_html", ""), focus_keyword,
                                          draft.get("summary", ""))
         return draft, findings
+
+
+RULE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "is_general_rule": {"type": "boolean"},
+        "rule_text": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["is_general_rule", "rule_text", "reason"],
+    "additionalProperties": False,
+}
+
+
+async def classify_feedback(claude: "ClaudeClient", instruction: str) -> dict:
+    """Decide whether review feedback is a lasting rule or a one-off edit.
+
+    Owner decision 2026-08-19: the bot judges automatically, then reports what it
+    saved, so "automatic" never means "invisible".
+    """
+    prompt = f"""Ein Redakteur hat beim Review eines Blogartikels diese Anweisung gegeben:
+
+„{instruction}“
+
+Entscheide: Ist das eine allgemeine Regel, die für ALLE künftigen Artikel gelten soll
+(z. B. „schreibe nie X“, „verwende immer den Ton Y“, „erwähne stets Z“)?
+Oder betrifft es nur diesen einen Artikel (z. B. „ergänze hier einen Absatz über DIN 4109“,
+„der dritte Abschnitt ist zu lang“)?
+
+Formuliere bei einer allgemeinen Regel „rule_text“ als knappe, überprüfbare Anweisung
+auf Deutsch, die einem Autor ohne Kontext verständlich ist.
+
+Antworte als JSON: {{"is_general_rule": true/false, "rule_text": "…", "reason": "kurz"}}"""
+    result = claude._parse_json(await claude._ask(
+        prompt, max_tokens=1024, output_schema=RULE_SCHEMA))
+    return result

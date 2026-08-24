@@ -50,3 +50,13 @@ def test_audit(db):
     db.log_audit(42, "publish", "gid://shopify/Article/1", "ok", "live")
     rows = db._conn.execute("SELECT * FROM audit_log").fetchall()
     assert len(rows) == 1 and rows[0]["action"] == "publish"
+
+
+def test_keyword_usage_tracking(db):
+    assert db.used_keywords() == set()
+    db.mark_keyword_used("Absorber Büro", "Akustik im Büro", "gid://shopify/Article/1")
+    db.mark_keyword_used("akustik büro", "Akustik im Büro")
+    used = db.used_keywords()
+    assert used == {"absorber büro", "akustik büro"}   # normalised to lowercase
+    db.mark_keyword_used("Absorber Büro", "Akustik im Büro")   # idempotent
+    assert len(db.used_keywords()) == 2

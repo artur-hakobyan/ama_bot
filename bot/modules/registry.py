@@ -9,6 +9,9 @@ class Services:
     db: object
     shopify: object
     claude: object
+    keywords: object = None      # KeywordSheet, when the workbook is present
+    rules: object = None         # HouseRules — style rules learned from review
+    writer: object = None        # SEOWriter — three-pass long-form pipeline
 
 
 def main_menu_keyboard(modules) -> InlineKeyboardMarkup:

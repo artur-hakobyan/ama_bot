@@ -6,7 +6,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from bot.auth import authorized
-from bot.claude_client import ClaudeError
+from bot.claude_client import ClaudeError, classify_feedback
 from bot.shopify_client import ShopifyError
 
 logger = logging.getLogger(__name__)
@@ -144,9 +144,32 @@ def preview_keyboard(draft_id: str) -> InlineKeyboardMarkup:
 def blog_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🆕 New article", callback_data="blog:new")],
+        [InlineKeyboardButton("📊 From keyword sheet", callback_data="blog:pillars")],
         [InlineKeyboardButton("✏️ Edit existing", callback_data="blog:listedit")],
         [InlineKeyboardButton("🗑 Delete existing", callback_data="blog:listdel")],
         [InlineKeyboardButton("⬅️ Back", callback_data="main:menu")],
+    ])
+
+
+def pillar_keyboard(sheet, used: set) -> InlineKeyboardMarkup:
+    """One row per pillar, showing how many keywords remain unwritten."""
+    rows = []
+    for i, pillar in enumerate(sheet.pillars):
+        left = sheet.remaining(pillar, used)
+        if left:
+            rows.append([InlineKeyboardButton(f"{pillar} ({left})",
+                                              callback_data=f"blog:pillar:{i}")])
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="blog:menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def keyword_confirm_keyboard(pillar_index: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✍️ Write this article",
+                              callback_data=f"blog:writekw:{pillar_index}")],
+        [InlineKeyboardButton("⏭ Next keyword",
+                              callback_data=f"blog:skipkw:{pillar_index}")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="blog:pillars")],
     ])
 
 
@@ -263,6 +286,22 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
             return
         services.db.update_draft(draft_id, body_html=new_body)
         services.db.log_audit(user_id, "article_edit", gid or "-", "ok", text[:200])
+
+        # The learning loop: a correction meant as a general rule is remembered
+        # for every future article, not just applied to this one.
+        if services.rules is not None:
+            try:
+                verdict = await classify_feedback(services.claude, text)
+                if verdict.get("is_general_rule") and verdict.get("rule_text"):
+                    services.rules.add(verdict["rule_text"], source=text[:120])
+                    services.db.log_audit(user_id, "rule_added", "-", "ok",
+                                          verdict["rule_text"][:200])
+                    await update.effective_message.reply_text(
+                        "📌 Saved as a permanent rule for future articles:\n"
+                        f"„{verdict['rule_text']}“\n\n"
+                        "Use /rules to review or remove it.")
+            except ClaudeError:
+                pass  # a failed classification must never block the edit itself
         draft = services.db.get_draft(draft_id)
         admin_url = services.shopify.admin_url(gid) if gid else None
         if admin_url is None:
@@ -300,6 +339,99 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
                                                   reply_markup=blog_menu_keyboard())
 
 
+
+# --- keyword-sheet flow -------------------------------------------------------
+
+async def _write_from_keyword(update, context, pillar: str, kw, user_id: int):
+    """Run the three-pass SEO pipeline and file the result as a Shopify draft."""
+    services = context.bot_data["services"]
+    msg = update.effective_message
+    status = await msg.reply_text(f"✍️ Writing „{kw.keyword}“ …")
+
+    ranked = services.keywords.ranked(pillar, services.db.used_keywords())
+    supporting = [k.keyword for k in ranked if k.keyword != kw.keyword][:8]
+
+    # Only link to articles that are actually live, so links never 404.
+    links = []
+    if services.config.shopify_enabled:
+        try:
+            handle, existing = await services.shopify.list_articles(
+                services.config.blog_id, first=10)
+            links = [(a["title"], f"https://amawalls.com/blogs/{handle}/{a['handle']}")
+                     for a in existing if a.get("isPublished")][:6]
+        except ShopifyError:
+            links = []
+
+    async def progress(label, findings):
+        try:
+            await status.edit_text(f"✍️ „{kw.keyword}“ — {label}")
+        except Exception:
+            pass  # editing is cosmetic; never fail the run over it
+
+    try:
+        draft_data, findings = await services.writer.write(
+            kw.keyword, pillar, supporting, internal_links=links,
+            on_progress=progress)
+    except ClaudeError as e:
+        services.db.log_audit(user_id, "seo_draft", kw.keyword, "error", str(e))
+        await msg.reply_text(f"❌ Claude error: {e}")
+        return
+
+    draft_id = services.db.create_draft(
+        user_id, draft_data["title_a"], draft_data["title_b"],
+        draft_data["body_html"], draft_data["summary"], draft_data["tags"])
+    ctx = services.db.get_session(user_id)["context"]
+    ctx.update({"keyword": kw.keyword, "pillar": pillar})
+    services.db.set_step(user_id, None, ctx)
+
+    admin_url = None
+    if services.config.shopify_enabled:
+        try:
+            article = await services.shopify.create_article(
+                services.config.blog_id, draft_data["title_a"],
+                draft_data["body_html"], draft_data["summary"],
+                draft_data["tags"], services.config.author_name)
+            services.db.update_draft(draft_id, shopify_article_gid=article["id"])
+            admin_url = services.shopify.admin_url(article["id"])
+            services.db.log_audit(user_id, "seo_draft", kw.keyword, "ok",
+                                  f"draft {draft_id}")
+        except ShopifyError as e:
+            services.db.log_audit(user_id, "seo_draft", kw.keyword, "error", str(e))
+            await msg.reply_text(f"❌ Shopify error: {e}")
+
+    from bot import style_check
+    words = style_check.word_count(draft_data["body_html"])
+    density = style_check.keyword_density(draft_data["body_html"], kw.keyword)
+    draft = services.db.get_draft(draft_id)
+
+    header = (f"🔑 {md_escape(kw.keyword)} · {words} Wörter · Dichte {density}%\n"
+              f"📂 {md_escape(pillar)}")
+    await msg.reply_text(
+        header + "\n\n" + preview_text(draft, admin_url, findings),
+        reply_markup=preview_keyboard(draft_id), parse_mode="Markdown",
+        disable_web_page_preview=True)
+
+
+async def _show_keyword(query, services, pillar_index: int, offset: int = 0):
+    pillar = services.keywords.pillars[pillar_index]
+    used = services.db.used_keywords()
+    ranked = services.keywords.ranked(pillar, used)
+    if not ranked:
+        await query.edit_message_text(
+            f"✅ „{pillar}“ is fully covered — every keyword has an article.",
+            reply_markup=blog_menu_keyboard())
+        return None, None
+    kw = ranked[min(offset, len(ranked) - 1)]
+    await query.edit_message_text(
+        f"📂 *{md_escape(pillar)}*\n\n"
+        f"Next keyword ({offset + 1}/{len(ranked)}):\n"
+        f"🔑 *{md_escape(kw.keyword)}*\n"
+        f"📈 {kw.volume:,}/Monat · Wettbewerb: {kw.competition or 'unbekannt'}"
+        .replace(",", "."),
+        reply_markup=keyword_confirm_keyboard(pillar_index), parse_mode="Markdown")
+    return pillar, kw
+
+
 # --- callbacks ---------------------------------------------------------------
 
 @authorized
@@ -314,6 +446,48 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         services.db.set_step(user_id, None, {})
         await query.edit_message_text("📝 Blog — choose an action:",
                                       reply_markup=blog_menu_keyboard())
+        return
+
+    if action == "pillars":
+        if not services.keywords:
+            await query.edit_message_text(
+                "⚠️ Keyword sheet not available on this installation.",
+                reply_markup=blog_menu_keyboard())
+            return
+        used = services.db.used_keywords()
+        await query.edit_message_text(
+            "📊 Choose a pillar topic (remaining keywords in brackets):",
+            reply_markup=pillar_keyboard(services.keywords, used))
+        return
+
+    if action == "pillar":
+        ctx = services.db.get_session(user_id)["context"]
+        ctx["kw_offset"] = 0
+        services.db.set_step(user_id, None, ctx)
+        await _show_keyword(query, services, int(arg), 0)
+        return
+
+    if action == "skipkw":
+        ctx = services.db.get_session(user_id)["context"]
+        offset = int(ctx.get("kw_offset", 0)) + 1
+        ctx["kw_offset"] = offset
+        services.db.set_step(user_id, None, ctx)
+        await _show_keyword(query, services, int(arg), offset)
+        return
+
+    if action == "writekw":
+        pillar_index = int(arg)
+        pillar = services.keywords.pillars[pillar_index]
+        ctx = services.db.get_session(user_id)["context"]
+        offset = int(ctx.get("kw_offset", 0))
+        ranked = services.keywords.ranked(pillar, services.db.used_keywords())
+        if not ranked:
+            await query.edit_message_text("⚠️ No keywords left in this pillar.",
+                                          reply_markup=blog_menu_keyboard())
+            return
+        kw = ranked[min(offset, len(ranked) - 1)]
+        await query.edit_message_text(f"🔑 {kw.keyword} — starting …")
+        await _write_from_keyword(update, context, pillar, kw, user_id)
         return
 
     if action == "new":

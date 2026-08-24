@@ -23,6 +23,12 @@ CREATE TABLE IF NOT EXISTS drafts (
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS keywords_used (
+  keyword TEXT PRIMARY KEY,
+  pillar TEXT NOT NULL,
+  article_gid TEXT,
+  used_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
@@ -119,6 +125,17 @@ class Database:
     def delete_draft(self, draft_id: str):
         self._conn.execute("DELETE FROM drafts WHERE id = ?", (draft_id,))
         self._conn.commit()
+
+    # --- keyword inventory ---
+    def mark_keyword_used(self, keyword: str, pillar: str, article_gid: str = ""):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO keywords_used (keyword, pillar, article_gid)"
+            " VALUES (?, ?, ?)", (keyword.strip().lower(), pillar, article_gid))
+        self._conn.commit()
+
+    def used_keywords(self) -> set:
+        rows = self._conn.execute("SELECT keyword FROM keywords_used").fetchall()
+        return {r["keyword"] for r in rows}
 
     # --- audit ---
     def log_audit(self, user_id, action, target, result, detail=""):

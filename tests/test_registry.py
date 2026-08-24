@@ -101,3 +101,30 @@ async def test_stop_silent_for_stranger(services):
     u = make_update(999, "/stop")
     await stop_cmd(u, make_context(services))
     u.effective_message.reply_text.assert_not_awaited()
+
+
+async def test_rules_command_lists_and_removes(services, tmp_path):
+    from bot.house_rules import HouseRules
+    from bot.main import rules_cmd
+    services.rules = HouseRules(tmp_path / "rules.json")
+    services.rules.add("Schreibe nie „man“.", source="review")
+
+    u = make_update(111, "/rules")
+    ctx = make_context(services); ctx.args = []
+    await rules_cmd(u, ctx)
+    assert "Schreibe nie" in u.effective_message.reply_text.await_args.args[0]
+
+    u2 = make_update(111, "/rules remove 1")
+    ctx2 = make_context(services); ctx2.args = ["remove", "1"]
+    await rules_cmd(u2, ctx2)
+    assert services.rules.all() == []
+
+
+async def test_rules_command_silent_for_stranger(services, tmp_path):
+    from bot.house_rules import HouseRules
+    from bot.main import rules_cmd
+    services.rules = HouseRules(tmp_path / "r.json")
+    u = make_update(999, "/rules")
+    ctx = make_context(services); ctx.args = []
+    await rules_cmd(u, ctx)
+    u.effective_message.reply_text.assert_not_awaited()
