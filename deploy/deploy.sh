@@ -2,8 +2,8 @@
 # Deploy to arturserver. Excludes secrets, venv, and the database.
 set -euo pipefail
 
-HOST="${1:-arturserver}"
-DEST="/opt/amma_bot"
+HOST="${1:-artServer}"   # SSH config alias (capital S)
+DEST="/var/www/amma_bot"   # matches the convention of other projects on this box
 
 rsync -az --delete \
   --exclude '.env' --exclude '*.db' --exclude '.venv' \

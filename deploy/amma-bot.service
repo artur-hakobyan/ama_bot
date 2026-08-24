@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=amma
-WorkingDirectory=/opt/amma_bot
-ExecStart=/opt/amma_bot/.venv/bin/python -m bot.main
+User=root
+WorkingDirectory=/var/www/amma_bot
+ExecStart=/var/www/amma_bot/.venv/bin/python -m bot.main
 Restart=always
 RestartSec=5
 # .env is read by python-dotenv from WorkingDirectory; no EnvironmentFile needed
