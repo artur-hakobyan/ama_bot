@@ -242,13 +242,34 @@ zwei Überschriften.
 - Lange Aufzählungen als Liste formatieren.
 - Schließe mit einem Fazit, das die Kernaussagen zusammenfasst und eine klare \
 Handlungsaufforderung enthält.
-- Länge: 2000 Wörter (±100)."""
+- Länge: 1800–2100 Wörter. Zähle mit und halte den Bereich ein.
+
+ABSOLUTE VERBOTE — kein einziges Mal im Text:
+„man“ (duze stattdessen den Leser), alle Modalverben („kann“, „kannst“, „können“,
+„könnte“, „möchte“, „möchtest“, „willst“, „würde“, „sollte“, „dürfte“) sowie
+„verhältnismäßig“, „ganz“, „eigentlich“, „quasi“, „je-desto“.
+Formuliere direkt und im Aktiv: nicht „Helle Farben können den Raum aufhellen“,
+sondern „Helle Farben hellen den Raum auf“.
+
+SPARSAM VERWENDEN (kleines Kontingent, nicht mehr):
+„auch“ maximal 3×, „wenn“ maximal 3×, „gerade“ maximal 2×, „falls“ maximal 2×
+im gesamten Artikel. Schreibe natürliches Deutsch — erzwinge keine Umwege, nur
+um diese Wörter zu vermeiden."""
 
 
-def _seo_system_prompt(pillar: str, house_rules_block: str = "") -> str:
+def _seo_system_prompt(pillar: str, house_rules_block: str = "",
+                       include_style: bool = True) -> str:
+    """System prompt for one pass of the pipeline.
+
+    Pass 1 writes freely (include_style=False) — piling every constraint onto the
+    first draft produced stiff, mechanical prose. Passes 2 and 3 add the rules.
+    """
     framing = PILLAR_FRAMING.get(pillar, PILLAR_FRAMING["_default"])
-    return (f"{SEO_PERSONA}\n\n{framing}\n\n{SEO_STYLE_RULES}{house_rules_block}\n\n"
-            "Wenn du nach JSON gefragt wirst, antworte NUR mit validem JSON.")
+    parts = [SEO_PERSONA, framing, PRODUCT_KNOWLEDGE]
+    if include_style:
+        parts.append(SEO_STYLE_RULES)
+    block = "\n\n".join(parts) + house_rules_block
+    return block + "\n\nWenn du nach JSON gefragt wirst, antworte NUR mit validem JSON."
 
 
 PILLAR_FRAMING = {
@@ -293,6 +314,24 @@ Trennwände, Deckensegel, Raumteiler, textile Lösungen. Du vergleichst fair. \
 Der Shop: AMAwalls fertigt maßgefertigte Akustikbilder als designorientierte Alternative.""",
 }
 
+
+# Product facts the writer must never get wrong (from operator review 2026-08-24).
+PRODUCT_KNOWLEDGE = """Produktwissen AMAwalls — halte dich immer daran:
+- Kein Mess-Zwang: Unser Akustikbild hängt wie ein normales Bild und verbessert den
+  Klang sofort, ohne Planung, Messung oder Fachbetrieb. Baue niemals eine Hürde auf
+  („zuerst Nachhallzeit messen lassen“) — genau die Menschen ohne Lust auf Messungen
+  kaufen unser Produkt. Eine professionelle Messung erwähnst du höchstens als optionalen
+  Schritt für Perfektionisten, niemals als Voraussetzung.
+- Nicht nur Großraumbüros: Auch kleine Büros, in denen wenige Menschen zusammen in einem
+  Raum arbeiten, leiden unter Lärm. Unser Produkt wirkt dort genauso. Schreibe niemals so,
+  als sei die Lösung nur für große Büros gedacht.
+- Motiv später austauschbar: Bei Umgestaltung oder Umzug tauschst du günstig nur das Motiv
+  aus. Rahmen und Akustikeinsatz bleiben bestehen. Das spart Geld und Material.
+- Ehrliche Wirkung: Unser Produkt ersetzt keine professionelle Akustikplanung mit
+  Spezialabsorbern. Es verwandelt große Wandflächen in Absorber und wertet den Raum
+  gleichzeitig optisch auf. Versprich niemals dieselbe Wirkung wie technische
+  Spezialprodukte."""
+
 SEO_ARTICLE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -317,51 +356,91 @@ class SEOWriter:
         self._claude = claude
         self._rules = house_rules
 
-    def _system(self, pillar: str) -> str:
+    def _system(self, pillar: str, include_style: bool = True) -> str:
         block = self._rules.as_prompt_block() if self._rules else ""
-        return _seo_system_prompt(pillar, block)
+        return _seo_system_prompt(pillar, block, include_style=include_style)
 
     async def draft(self, focus_keyword: str, pillar: str, supporting: list,
                     must_include: str = "-", internal_links: list = None) -> dict:
-        supporting_text = ", ".join(supporting) if supporting else "keine weiteren"
-        links_text = ("\n".join(f"- {t}: {u}" for t, u in (internal_links or []))
-                      or "keine vorhandenen Beiträge")
-        prompt = f"""Schreibe einen SEO-Blogartikel.
+        """Pass 1 — write a genuinely good article. No style bans, no keyword quota.
 
-Fokus-Keyword: {focus_keyword}
+        The reviewer's guidance (2026-08-24): write naturally first, then correct with
+        the rules as a checklist. Front-loading every constraint made the prose stiff.
+        """
+        topic_hint = (f"Das Thema kreist um: {focus_keyword}. Nutze diese Formulierung "
+                      "nur, wo sie natürlich passt — erzwinge sie nicht.")
+        prompt = f"""Schreibe einen ausgezeichneten deutschen Blogartikel.
+
+{topic_hint}
 Pillar-Thema: {pillar}
-Weitere Keywords (nach Suchvolumen absteigend): {supporting_text}
 Muss enthalten sein: {must_include}
 
-Bestehende Blogbeiträge für interne Verlinkung (verlinke 2–4 davon an passenden Stellen \
-im Fließtext als <a href="...">):
-{links_text}
+Worauf es in diesem ersten Schritt ankommt:
+- Schreibe einen Artikel, den ein interessierter Laie gerne liest. Verständlich,
+  lebendig und konkret — niemals trocken, technisch oder wie ein Fachaufsatz.
+- Erkläre Fachbegriffe in einfachen Worten, sobald du sie verwendest.
+- Baue die Produktvorteile von AMAwalls sinnvoll und ehrlich ein.
+- Länge: 1800–2100 Wörter.
+- Struktur: Einleitung, mehrere Abschnitte mit Zwischenüberschriften, Fazit mit
+  Handlungsaufforderung.
 
-Vorgehen:
-1. Überlege, was die Zielgruppe zu diesem Thema am meisten interessiert.
-2. Schreibe den Text mit sauberen inhaltlichen Übergängen, ohne Wiederholungen und \
-ohne von Thema zu Thema zu springen. Alles muss sachlich richtig sein.
-3. Prüfe dich selbst: Wäre dieser Artikel für dich als recherchierenden Kunden \
-interessant? Passe an, bis die Antwort ja ist.
-
-Keyword-Regeln: Das Fokus-Keyword steht im Titel und mehrfach im Text. Keywords mit \
-höherem Suchvolumen häufiger verwenden. Natürlich einbetten, nie erzwungen. \
-Keyword-Dichte unter 4 %.
+Denke NICHT an SEO, Keywords oder Stilregeln. Die kommen in einem späteren Schritt.
+Schreibe einfach den bestmöglichen Artikel.
 
 Antworte als JSON:
-{{"title_a": "Titel mit Fokus-Keyword",
- "title_b": "alternativer Titel mit Fokus-Keyword",
- "outline": ["Gliederungspunkt 1", "..."],
- "body_html": "vollständiger Artikel als HTML (<h2>, <h3>, <p>, <ul>, <a href>), 2000 Wörter",
- "summary": "Meta-Beschreibung, 120–156 Zeichen, Fokus-Keyword im ersten Satz",
- "tags": ["fokus-keyword", "weitere", "tags"]}}"""
+{{"title_a": "Titel", "title_b": "alternativer Titel",
+ "outline": ["Abschnitt 1", "..."],
+ "body_html": "Artikel als HTML (<h2>, <h3>, <p>, <ul>)",
+ "summary": "kurze inhaltliche Zusammenfassung, 120–156 Zeichen, ohne Werbung und "
+            "ohne Formulierungen wie „Der Artikel erklärt“",
+ "tags": ["passende", "tags"]}}"""
         draft = self._claude._parse_json(await self._claude._ask(
             prompt, max_tokens=32000, output_schema=SEO_ARTICLE_SCHEMA,
-            system=self._system(pillar), effort="low"))
+            system=self._system(pillar, include_style=False), effort="low"))
         missing = set(SEO_ARTICLE_SCHEMA["required"]) - set(draft)
         if missing:
             raise ClaudeError(f"SEO draft missing keys: {missing}")
         return draft
+
+    async def apply_keywords(self, draft: dict, focus_keyword: str, supporting: list,
+                             pillar: str, internal_links: list = None) -> dict:
+        """Pass 3 — weave keywords and links in naturally, without breaking the prose."""
+        supporting_text = ", ".join(supporting[:8]) if supporting else "keine"
+        links_text = ("\n".join(f"- {t}: {u}" for t, u in (internal_links or []))
+                      or "keine passenden Beiträge vorhanden")
+        prompt = f"""Optimiere diesen fertigen Artikel für Suchmaschinen. Der Text ist
+inhaltlich fertig — ändere so wenig wie möglich.
+
+Fokus-Keyword: {focus_keyword}
+Weitere Keywords: {supporting_text}
+
+KEYWORD-REGELN (sehr wichtig):
+- Das Fokus-Keyword steht wortwörtlich im Titel (title_a) — dort zählt es für Google
+  am stärksten. Beispiel: „Absorber Büro: …“ ist im Titel korrekt und erwünscht.
+- Im Fließtext verwendest du IMMER die natürliche, grammatisch korrekte Form.
+  Beispiel: aus „absorber büro“ wird „Absorber im Büro“, „ein Konzept für Absorber
+  im Büro“, „Absorber-Aufbau für Büros“. Konstruktionen wie „Absorber Büro-Konzept“
+  oder „ein Absorber Büro fängt Schall ab“ sind falsches Deutsch und verboten.
+- Im Fließtext taucht das Thema zwei- bis dreimal in natürlicher Form auf, damit
+  Google das Thema klar erkennt — aber niemals als erzwungener Wortblock.
+- Lieber weniger Keywords als erzwungene Formulierungen. Keyword-Dichte unter 4 %.
+
+INTERNE LINKS:
+{links_text}
+Verlinke NUR, wo der Bezug inhaltlich wirklich trägt. Ein Link zu einem Beitrag über
+ein anderes Thema wirkt aufgesetzt und schadet mehr, als er nützt. Null Links sind
+besser als ein erzwungener Link. Setze höchstens zwei.
+
+Aktueller Artikel:
+Titel: {draft.get('title_a')}
+{draft.get('body_html')}
+
+Antworte als JSON mit denselben Keys (title_a, title_b, outline, body_html, summary,
+tags). Die Meta-Beschreibung („summary“) bleibt eine inhaltliche Zusammenfassung mit
+120–156 Zeichen, ohne Werbesprache."""
+        return self._claude._parse_json(await self._claude._ask(
+            prompt, max_tokens=32000, output_schema=SEO_ARTICLE_SCHEMA,
+            system=self._system(pillar), effort="low"))
 
     async def revise(self, draft: dict, findings: list, pillar: str,
                      focus_keyword: str) -> dict:
@@ -380,6 +459,11 @@ Titel: {draft.get('title_a')}
 Meta: {draft.get('summary')}
 {draft.get('body_html')}
 
+Wichtig bei der Überarbeitung:
+- Die Meta-Beschreibung („summary“) bleibt zwischen 120 und 156 Zeichen.
+- Der Artikel bleibt zwischen 1800 und 2100 Wörtern. Kürze niemals unter 1800 Wörter, \
+um andere Regeln zu erfüllen — erweitere stattdessen die Inhalte mit echtem Mehrwert.
+
 Antworte als JSON mit denselben Keys wie zuvor (title_a, title_b, outline, body_html, \
 summary, tags)."""
         revised = self._claude._parse_json(await self._claude._ask(
@@ -389,23 +473,37 @@ summary, tags)."""
 
     async def write(self, focus_keyword: str, pillar: str, supporting: list,
                     must_include: str = "-", internal_links=None, on_progress=None):
-        """Draft, then revise until the mechanical checks pass (or attempts run out).
+        """Three passes: write well → fix style → add keywords and links.
 
-        Returns (draft, remaining_findings). Remaining findings are surfaced to the
-        operator rather than silently accepted.
+        Returns (draft, remaining_findings).
         """
         from bot import style_check
 
+        if on_progress:
+            await on_progress("Schreibe den Artikel …", [])
         draft = await self.draft(focus_keyword, pillar, supporting, must_include,
                                  internal_links)
+
         for attempt in range(self.MAX_REVISIONS):
-            findings = style_check.check(draft.get("body_html", ""), focus_keyword,
+            findings = style_check.check(draft.get("body_html", ""), "",
                                          draft.get("summary", ""))
             if not findings:
-                return draft, []
+                break
             if on_progress:
-                await on_progress(attempt + 1, findings)
+                await on_progress(f"Stil-Korrektur {attempt + 1}", findings)
             draft = await self.revise(draft, findings, pillar, focus_keyword)
+
+        if on_progress:
+            await on_progress("Keywords und Links einarbeiten …", [])
+        draft = await self.apply_keywords(draft, focus_keyword, supporting, pillar,
+                                          internal_links)
+
         findings = style_check.check(draft.get("body_html", ""), focus_keyword,
                                      draft.get("summary", ""))
+        if findings:
+            if on_progress:
+                await on_progress("Letzte Korrektur", findings)
+            draft = await self.revise(draft, findings, pillar, focus_keyword)
+            findings = style_check.check(draft.get("body_html", ""), focus_keyword,
+                                         draft.get("summary", ""))
         return draft, findings
