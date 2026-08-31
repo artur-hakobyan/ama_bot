@@ -417,6 +417,8 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int):
         reply_markup=preview_keyboard(draft_id), parse_mode="Markdown",
         disable_web_page_preview=True)
 
+    await _offer_images(msg, services, draft_id, kw.keyword, pillar)
+
 
 async def _show_keyword(query, services, pillar_index: int, offset: int = 0):
     pillar = services.keywords.pillars[pillar_index]
@@ -438,6 +440,47 @@ async def _show_keyword(query, services, pillar_index: int, offset: int = 0):
     return pillar, kw
 
 
+async def _offer_images(msg, services, draft_id: str, keyword: str, pillar: str):
+    """Show 2-3 matching mockups, or offer to generate one when none fit."""
+    from bot.google_drive import image_brief, suggest_images
+
+    if not services.google or not services.config.drive_mockups_folder_id:
+        return
+    try:
+        images = services.images_cached()
+        picks = suggest_images(images, [keyword, pillar])
+    except Exception as e:                      # Drive hiccup must not block review
+        logger.warning("Image lookup failed: %s", e)
+        return
+
+    if not picks:
+        await msg.reply_text(
+            "🖼 Kein passendes Mockup in _All Mockups gefunden.\n\n"
+            f"Vorschlag für ein neues Bild:\n_{md_escape(image_brief(keyword, pillar))}_",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                "🎨 Bild generieren lassen", callback_data=f"blog:genimg:{draft_id}")]]),
+            parse_mode="Markdown")
+        return
+
+    from telegram import InputMediaPhoto
+    media, buttons = [], []
+    for n, pick in enumerate(picks, 1):
+        try:
+            data = services.google.download(pick["id"])
+        except Exception:
+            continue
+        media.append(InputMediaPhoto(data, caption=f"{n}. {pick['name'][:180]}"))
+        buttons.append([InlineKeyboardButton(f"✅ Bild {n} verwenden",
+                                             callback_data=f"blog:useimg:{draft_id}:{n}")])
+    if not media:
+        return
+    await msg.reply_media_group(media)
+    buttons.append([InlineKeyboardButton("🎨 Stattdessen generieren",
+                                         callback_data=f"blog:genimg:{draft_id}")])
+    await msg.reply_text("🖼 Passende Mockups — welches soll in den Artikel?",
+                         reply_markup=InlineKeyboardMarkup(buttons))
+
+
 # --- callbacks ---------------------------------------------------------------
 
 @authorized
@@ -452,6 +495,30 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         services.db.set_step(user_id, None, {})
         await query.edit_message_text("📝 Blog — choose an action:",
                                       reply_markup=blog_menu_keyboard())
+        return
+
+    if action in ("useimg", "genimg"):
+        # arg is "draftid" (genimg) or "draftid:n" (useimg)
+        parts = (arg or "").split(":")
+        draft = services.db.get_draft(parts[0]) if parts else None
+        if draft is None:
+            await query.edit_message_text("⚠️ This draft no longer exists.",
+                                          reply_markup=blog_menu_keyboard())
+            return
+        if action == "useimg":
+            # Shopify's article image takes a public URL; Drive links are not
+            # publicly served, so the operator attaches it in the admin for now.
+            await query.edit_message_text(
+                f"🖼 Bild {parts[1] if len(parts) > 1 else ''} vorgemerkt.\n"
+                "Lade es im Shopify-Admin als Beitragsbild hoch — "
+                "der Entwurf ist dort bereits angelegt.")
+        else:
+            services.db.log_audit(user_id, "image_generate_requested",
+                                  draft["id"], "ok", "")
+            await query.edit_message_text(
+                "🎨 Bildgenerierung ist noch nicht angeschlossen.\n"
+                "Der Vorschlag oben beschreibt das passende Motiv — "
+                "ich baue die automatische Generierung als Nächstes ein.")
         return
 
     if action == "pillars":

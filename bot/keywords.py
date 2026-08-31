@@ -110,3 +110,65 @@ class KeywordSheet:
 
     def remaining(self, pillar: str, used: set) -> int:
         return len(self.ranked(pillar, used))
+
+
+class LiveKeywordSheet(KeywordSheet):
+    """Keyword inventory read from the live Google Sheet.
+
+    Same interface as the workbook version, so callers are unaffected. Values are
+    cached briefly: a Monday run touches every tab, and the sheet rarely changes
+    mid-run.
+    """
+
+    def __init__(self, google_client, spreadsheet_id: str, cache_seconds: int = 300):
+        self._g = google_client
+        self._id = spreadsheet_id
+        self._cache_seconds = cache_seconds
+        self._tabs = None
+        self._rows = {}
+        self._fetched = {}
+
+    @property
+    def pillars(self) -> list:
+        if self._tabs is None:
+            self._tabs = self._g.sheet_tabs(self._id)
+        return [t for t in self._tabs if t != MASTER_TAB]
+
+    def _values(self, pillar: str) -> list:
+        import time
+        now = time.time()
+        if (pillar not in self._rows
+                or now - self._fetched.get(pillar, 0) > self._cache_seconds):
+            self._rows[pillar] = self._g.sheet_values(self._id, pillar)
+            self._fetched[pillar] = now
+        return self._rows[pillar]
+
+    def keywords(self, pillar: str) -> list:
+        rows = self._values(pillar)
+        if not rows:
+            return []
+        header = rows[0]
+        cols = {str(h).strip(): i for i, h in enumerate(header) if h}
+        i_kw = cols.get("Keyword", 0)
+        i_vol = cols.get("Avg. monthly searches")
+        i_comp = cols.get("Competition")
+        i_idx = cols.get("Competition (indexed value)")
+        i_pillar = cols.get("Pillar-Topics")
+
+        def cell(row, index):
+            if index is None or index >= len(row):
+                return ""
+            return row[index]
+
+        out = []
+        for row in rows[1:]:
+            if not row or not cell(row, i_kw):
+                continue
+            out.append(Keyword(
+                keyword=str(cell(row, i_kw)).strip(),
+                volume=parse_number(cell(row, i_vol)),
+                competition=str(cell(row, i_comp) or "").strip(),
+                competition_index=parse_number(cell(row, i_idx)),
+                pillar=str(cell(row, i_pillar) or pillar).strip() or pillar,
+            ))
+        return out

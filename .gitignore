@@ -15,3 +15,6 @@ venv/
 # OS / editor
 .DS_Store
 house_rules.json
+
+# Google service account key — never commit
+google_service_account.json

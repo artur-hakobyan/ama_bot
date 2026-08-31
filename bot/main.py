@@ -181,12 +181,29 @@ def main():
         claude=ClaudeClient(cfg.anthropic_api_key, cfg.claude_model),
     )
     services.rules = HouseRules(cfg.house_rules_path)
+    if cfg.google_credentials_path:
+        try:
+            from bot.google_drive import GoogleClient
+            services.google = GoogleClient(cfg.google_credentials_path)
+        except Exception as e:
+            logging.getLogger(__name__).warning("Google access unavailable: %s", e)
     services.writer = SEOWriter(services.claude, services.rules)
-    try:
-        services.keywords = KeywordSheet(cfg.keyword_sheet_path)
-    except Exception as e:  # a missing workbook must not stop the bot
-        logging.getLogger(__name__).warning(
-            "Keyword sheet unavailable (%s) — keyword flow disabled", e)
+    # The live sheet is authoritative — the operator edits it directly. The local
+    # workbook is only a fallback when Google is unreachable.
+    if services.google and cfg.keyword_spreadsheet_id:
+        try:
+            from bot.keywords import LiveKeywordSheet
+            services.keywords = LiveKeywordSheet(services.google,
+                                                 cfg.keyword_spreadsheet_id)
+            logging.getLogger(__name__).info("Using live Google keyword sheet")
+        except Exception as e:
+            logging.getLogger(__name__).warning("Live sheet unavailable: %s", e)
+    if services.keywords is None:
+        try:
+            services.keywords = KeywordSheet(cfg.keyword_sheet_path)
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                "Keyword sheet unavailable (%s) — keyword flow disabled", e)
     app = build_application(services, modules=[blog])
     if cfg.transport == "webhook":
         app.run_webhook(listen="0.0.0.0", port=cfg.webhook_port,

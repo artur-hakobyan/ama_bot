@@ -33,6 +33,9 @@ class Config:
     shopify_enabled: bool
     keyword_sheet_path: str
     house_rules_path: str
+    google_credentials_path: str
+    keyword_spreadsheet_id: str
+    drive_mockups_folder_id: str
     shopify_client_id: str
     shopify_client_secret: str
 
@@ -79,6 +82,9 @@ class Config:
             keyword_sheet_path=env.get("KEYWORD_SHEET_PATH")
             or "docs/source/Keyword Pillar Topics - Akustikbilder Blog.xlsx",
             house_rules_path=env.get("HOUSE_RULES_PATH") or "house_rules.json",
+            google_credentials_path=env.get("GOOGLE_CREDENTIALS_PATH") or "",
+            keyword_spreadsheet_id=env.get("KEYWORD_SPREADSHEET_ID") or "",
+            drive_mockups_folder_id=env.get("DRIVE_MOCKUPS_FOLDER_ID") or "",
             shopify_client_id=env.get("SHOPIFY_CLIENT_ID") or "",
             shopify_client_secret=env.get("SHOPIFY_CLIENT_SECRET") or "",
         )
