@@ -242,7 +242,8 @@ zwei Überschriften.
 - Lange Aufzählungen als Liste formatieren.
 - Schließe mit einem Fazit, das die Kernaussagen zusammenfasst und eine klare \
 Handlungsaufforderung enthält.
-- Länge: 1800–2100 Wörter. Zähle mit und halte den Bereich ein.
+- Länge: 1200–1600 Wörter. Schreibe dicht und ohne Füllmaterial —
+  lieber ein kürzerer starker Text als ein aufgeblähter.
 
 ABSOLUTE VERBOTE — kein einziges Mal im Text:
 „man“ (duze stattdessen den Leser), alle Modalverben („kann“, „kannst“, „können“,
@@ -408,7 +409,7 @@ Worauf es in diesem ersten Schritt ankommt:
   Gefühl bekommen: „Mir wurde eine Lösung versprochen, verkauft wird mir ein Produkt.“
 - Abwechslung im Wortschatz: Wiederhole Signalwörter („selbst“, „gerade“, „besonders“)
   nicht in aufeinanderfolgenden Absätzen. Variiere bewusst.
-- Länge: 1800–2100 Wörter.
+- Länge: 1200–1600 Wörter.
 - Struktur: Einleitung, mehrere Abschnitte mit Zwischenüberschriften, Fazit mit
   Handlungsaufforderung.
 
@@ -523,8 +524,7 @@ Meta: {draft.get('summary')}
 
 Wichtig bei der Überarbeitung:
 - Die Meta-Beschreibung („summary“) bleibt zwischen 120 und 156 Zeichen.
-- Der Artikel bleibt zwischen 1800 und 2100 Wörtern. Kürze niemals unter 1800 Wörter, \
-um andere Regeln zu erfüllen — erweitere stattdessen die Inhalte mit echtem Mehrwert.
+- Der Artikel bleibt zwischen 1200 und 1600 Wörtern.
 
 Antworte als JSON mit denselben Keys wie zuvor (title_a, title_b, outline, body_html, \
 summary, tags, uncertain_facts)."""

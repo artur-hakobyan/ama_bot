@@ -18,8 +18,8 @@ CONDITIONALS = ["je mehr", "je weniger", "desto"]
 
 # Owner decision 2026-08-19: 1800–2100 counts as on-spec (the model lands ~1800
 # reliably; forcing a true 2000 costs an extra revision round for little gain).
-MIN_WORDS = 1800
-MAX_WORDS = 2100
+MIN_WORDS = 1200
+MAX_WORDS = 1600
 MAX_SENTENCE_WORDS = 25
 MAX_COMMAS = 2
 MAX_PARAGRAPH_WORDS = 200
@@ -80,6 +80,14 @@ def keyword_density(html: str, keyword: str) -> float:
         return 0.0
     hits = len(re.findall(re.escape(keyword.lower()), text))
     return round(hits * len(keyword.split()) / total * 100, 2)
+
+
+# Brand facts the reviewer corrected (2026-08-24). Prompt instructions alone let
+# one panel reference slip through, so these are verified mechanically.
+WRONG_BRAND_SPELLINGS = ["AMAwalls", "Amawalls", "AMA Walls", "AMAWalls"]
+OWN_PANEL_CLAIM = re.compile(
+    r"\b(unsere|unseren|wir bieten|ama walls[^.]{0,40})\s*[^.]{0,40}Akustikpaneele",
+    re.I)
 
 
 def check(html: str, focus_keyword: str = "", summary: str = "") -> list:
@@ -161,6 +169,18 @@ def check(html: str, focus_keyword: str = "", summary: str = "") -> list:
         findings.append("Keine Zwischenüberschriften gefunden.")
     if re.search(r"</h[1-6]>\s*<h[1-6]", html or "", re.I):
         findings.append("Zwei Überschriften stehen direkt hintereinander.")
+
+    for wrong in WRONG_BRAND_SPELLINGS:
+        if wrong in text:
+            findings.append(
+                f"Falsche Schreibweise „{wrong}“ — die Marke heißt immer „ama walls“.")
+            break
+
+    panel_claim = OWN_PANEL_CLAIM.search(text)
+    if panel_claim:
+        findings.append(
+            f"„{panel_claim.group(0)[:60]}…“ — ama walls verkauft keine Akustikpaneele, "
+            "nur Akustikbilder und Textildrucke.")
 
     if "fazit" not in lowered:
         findings.append("Kein „Fazit“-Abschnitt gefunden.")
