@@ -7,8 +7,8 @@ class ClaudeError(Exception):
     pass
 
 
-SYSTEM_PROMPT = """Du bist der Content-Autor von AMAwalls (amawalls.com), einem Shop für \
-maßgefertigte großformatige Textildrucke mit austauschbaren Rahmen sowie Akustikpaneele.
+SYSTEM_PROMPT = """Du bist der Content-Autor von ama walls (amawalls.com), einem Shop für \
+maßgefertigte großformatige Textildrucke mit austauschbaren Rahmen sowie Akustikbilder.
 
 Sprache: Deutsch, durchgehend du-Form. Ton: warm, organisch, zugänglich-premium — \
 beratend und konkret, niemals poliert, werblich oder aufdringlich. Kein Werbesprech, \
@@ -19,7 +19,7 @@ Dachschrägen, Alkoven, Rücksprünge, Flächen zwischen Fenstern, Wände über 
 Aufbau immer problem-first: Beginne mit der Herausforderung der schwierigen Wand, \
 dann die maßgefertigte Lösung als Auflösung.
 
-Struktur jedes Artikels (Muster der bestehenden AMAwalls-Blogartikel):
+Struktur jedes Artikels (Muster der bestehenden ama walls-Blogartikel):
 - Titel: konkretes Problem oder Nutzenversprechen ("Warum …", "Welche …"), kein Clickbait.
 - Einstieg: 2-4 Sätze, die das Wandproblem greifbar machen — ohne Produkt.
 - 4-6 <h2>-Abschnitte; mehrere davon als Frage formuliert ("Warum …", "Welche …", "So …").
@@ -265,7 +265,7 @@ def _seo_system_prompt(pillar: str, house_rules_block: str = "",
     first draft produced stiff, mechanical prose. Passes 2 and 3 add the rules.
     """
     framing = PILLAR_FRAMING.get(pillar, PILLAR_FRAMING["_default"])
-    parts = [SEO_PERSONA, framing, PRODUCT_KNOWLEDGE]
+    parts = [SEO_PERSONA, framing, PRODUCT_KNOWLEDGE, FACT_DISCIPLINE]
     if include_style:
         parts.append(SEO_STYLE_RULES)
     block = "\n\n".join(parts) + house_rules_block
@@ -273,50 +273,63 @@ def _seo_system_prompt(pillar: str, house_rules_block: str = "",
 
 
 PILLAR_FRAMING = {
-    "_default": """Der Shop: AMAwalls (amawalls.com) fertigt maßgefertigte großformatige \
-Textildrucke mit austauschbaren Rahmen sowie Akustikpaneele. Featured Designs in \
+    "_default": """Der Shop: ama walls (amawalls.com) fertigt maßgefertigte großformatige \
+Textildrucke mit austauschbaren Rahmen sowie Akustikbilder. Featured Designs in \
 Rotation: Silent Jelly, Unberührt, Poppy Seed Explosion.""",
 
     "Akustik im Büro": """Thema: Raumakustik in Büros und Großraumbüros. Du kennst die \
 Praxis: Lärmpegel, Nachhallzeit, Sprachverständlichkeit, konzentriertes Arbeiten. \
-Du erklärst fachlich sauber, aber ohne Fachchinesisch. Der Shop: AMAwalls fertigt \
-maßgefertigte Akustikbilder und Akustikpaneele, die Schall absorbieren und dabei wie \
+Du erklärst fachlich sauber, aber ohne Fachchinesisch. Der Shop: ama walls fertigt \
+maßgefertigte Akustikbilder, die Schall absorbieren und dabei wie \
 Kunst aussehen — die Lösung für Büros, die weder kahle Schaumstoffplatten noch schlechte \
 Akustik wollen.""",
 
     "Homeoffice Akustik": """Thema: Akustik am Arbeitsplatz zu Hause. Videocalls, \
-Konzentration, hallende Räume in Wohnungen. Der Shop: AMAwalls fertigt maßgefertigte \
+Konzentration, hallende Räume in Wohnungen. Der Shop: ama walls fertigt maßgefertigte \
 Akustikbilder, die im Wohnraum als Bild wirken statt als Büroausstattung.""",
 
     "Grundlagen Akustikbilder": """Thema: Was Akustikbilder sind, wie sie funktionieren, \
 woraus sie bestehen und wo sie wirken. Erklärender Grundlagen-Artikel. Der Shop: \
-AMAwalls fertigt maßgefertigte Akustikbilder mit eigenem Motiv.""",
+ama walls fertigt maßgefertigte Akustikbilder mit eigenem Motiv.""",
 
     "Raumakustik allgemein": """Thema: Raumakustik allgemein — Nachhall, Absorption, \
-Schallschutz in Wohn- und Arbeitsräumen. Der Shop: AMAwalls fertigt maßgefertigte \
-Akustikbilder und Akustikpaneele.""",
+Schallschutz in Wohn- und Arbeitsräumen. Der Shop: ama walls fertigt maßgefertigte \
+Akustikbilder.""",
 
     "Design & Gestaltung": """Thema: Gestaltung mit Akustikbildern — Motive, Formate, \
 Platzierung, Wirkung im Raum. Hier verbindest du Design-Kompetenz mit Akustik. \
-Der Shop: AMAwalls fertigt maßgefertigte Akustikbilder und großformatige Textildrucke \
+Der Shop: ama walls fertigt maßgefertigte Akustikbilder und großformatige Textildrucke \
 mit austauschbaren Rahmen.""",
 
     "Kaufberatung & Preise": """Thema: Kaufberatung für Akustikbilder — worauf es ankommt, \
 Qualitätsmerkmale, Preisgefüge, Maßanfertigung gegen Standardware. Ehrlich und beratend, \
-nie werblich. Der Shop: AMAwalls fertigt maßgefertigte Akustikbilder.""",
+nie werblich. Der Shop: ama walls fertigt maßgefertigte Akustikbilder.""",
 
     "Normen & Vorschriften": """Thema: Normen und Vorschriften zum Schallschutz im Büro \
 (DIN 4109, DGUV, VDI 2569). Du erklärst die Regeln praxisnah für Menschen ohne \
-Akustik-Ausbildung. Der Shop: AMAwalls fertigt maßgefertigte Akustikbilder.""",
+Akustik-Ausbildung. Der Shop: ama walls fertigt maßgefertigte Akustikbilder.""",
 
     "Alternative Lösungen": """Thema: Alternativen zu klassischen Akustikpaneelen — \
 Trennwände, Deckensegel, Raumteiler, textile Lösungen. Du vergleichst fair. \
-Der Shop: AMAwalls fertigt maßgefertigte Akustikbilder als designorientierte Alternative.""",
+Der Shop: ama walls fertigt maßgefertigte Akustikbilder als designorientierte Alternative.""",
 }
 
 
 # Product facts the writer must never get wrong (from operator review 2026-08-24).
-PRODUCT_KNOWLEDGE = """Produktwissen AMAwalls — halte dich immer daran:
+FACT_DISCIPLINE = """Faktentreue — ohne Ausnahme:
+- Schreibe niemals Zahlen, Normen, Studien oder physikalische Aussagen, für die es keine
+  belastbare Quelle gibt. Erfinde nichts, auch keine plausibel klingenden Details.
+- Keine erfundenen Studien („Studien zeigen …“ ohne konkrete Quelle), keine erfundenen
+  Messwerte, keine erfundenen Normen-Inhalte.
+- Fachbegriffe nur verwenden, wenn du ihre Definition sicher kennst. Beispiel: Die
+  Nachhallzeit ist die Zeit, in der der Schallpegel um 60 dB abfällt (auf ein
+  Millionstel der Schallenergie) — nicht „auf ein Hundertstel“.
+- Wenn du dir bei einer Angabe unsicher bist: formuliere sie allgemein statt konkret,
+  oder lasse sie weg. Führe unsichere Punkte am Ende im Feld „uncertain_facts“ auf,
+  damit ein Mensch sie prüft."""
+
+
+PRODUCT_KNOWLEDGE = """Produktwissen ama walls — halte dich immer daran:
 - Kein Mess-Zwang: Unser Akustikbild hängt wie ein normales Bild und verbessert den
   Klang sofort, ohne Planung, Messung oder Fachbetrieb. Baue niemals eine Hürde auf
   („zuerst Nachhallzeit messen lassen“) — genau die Menschen ohne Lust auf Messungen
@@ -330,7 +343,15 @@ PRODUCT_KNOWLEDGE = """Produktwissen AMAwalls — halte dich immer daran:
 - Ehrliche Wirkung: Unser Produkt ersetzt keine professionelle Akustikplanung mit
   Spezialabsorbern. Es verwandelt große Wandflächen in Absorber und wertet den Raum
   gleichzeitig optisch auf. Versprich niemals dieselbe Wirkung wie technische
-  Spezialprodukte."""
+  Spezialprodukte.
+- Schreibweise: Die Marke heißt immer „ama walls“ (klein, mit Leerzeichen) — niemals
+  „AMAwalls“, „Amawalls“ oder „AMA Walls“.
+- Sortiment: Wir bieten Akustikbilder und großformatige Textildrucke an. Wir verkaufen
+  KEINE Akustikpaneele — erwähne sie nur als Lösung anderer Anbieter.
+- Lieferzeit ehrlich benennen: Sofort wirksam heißt „ohne Planung und Montageaufwand“,
+  nicht „ohne jede Wartezeit“ — das Bild muss geliefert und aufgehängt werden.
+- Wir drängen unsere Lösung niemandem auf: Andere Maßnahmen sind ebenfalls sinnvoll.
+  Formuliere ergänzend („nicht nur …“), nie ausschließend."""
 
 SEO_ARTICLE_SCHEMA = {
     "type": "object",
@@ -341,8 +362,10 @@ SEO_ARTICLE_SCHEMA = {
         "summary": {"type": "string"},
         "tags": {"type": "array", "items": {"type": "string"}},
         "outline": {"type": "array", "items": {"type": "string"}},
+        "uncertain_facts": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["title_a", "title_b", "body_html", "summary", "tags", "outline"],
+    "required": ["title_a", "title_b", "body_html", "summary", "tags", "outline",
+                 "uncertain_facts"],
     "additionalProperties": False,
 }
 
@@ -379,7 +402,12 @@ Worauf es in diesem ersten Schritt ankommt:
 - Schreibe einen Artikel, den ein interessierter Laie gerne liest. Verständlich,
   lebendig und konkret — niemals trocken, technisch oder wie ein Fachaufsatz.
 - Erkläre Fachbegriffe in einfachen Worten, sobald du sie verwendest.
-- Baue die Produktvorteile von AMAwalls sinnvoll und ehrlich ein.
+- Produktplatzierung: Sprich zuerst allgemein über Lösungen. Akustikbilder sind eine
+  dieser allgemeinen Lösungen — und ama walls bietet sie an. Verteile Produkthinweise
+  über den Text, statt am Ende einen Werbeblock anzuhängen. Der Leser darf nie das
+  Gefühl bekommen: „Mir wurde eine Lösung versprochen, verkauft wird mir ein Produkt.“
+- Abwechslung im Wortschatz: Wiederhole Signalwörter („selbst“, „gerade“, „besonders“)
+  nicht in aufeinanderfolgenden Absätzen. Variiere bewusst.
 - Länge: 1800–2100 Wörter.
 - Struktur: Einleitung, mehrere Abschnitte mit Zwischenüberschriften, Fazit mit
   Handlungsaufforderung.
@@ -393,7 +421,8 @@ Antworte als JSON:
  "body_html": "Artikel als HTML (<h2>, <h3>, <p>, <ul>)",
  "summary": "kurze inhaltliche Zusammenfassung, 120–156 Zeichen, ohne Werbung und "
             "ohne Formulierungen wie „Der Artikel erklärt“",
- "tags": ["passende", "tags"]}}"""
+ "tags": ["passende", "tags"],
+ "uncertain_facts": ["Angaben, bei denen du dir nicht sicher bist — leer, wenn alles gesichert ist"]}}"""
         draft = self._claude._parse_json(await self._claude._ask(
             prompt, max_tokens=32000, output_schema=SEO_ARTICLE_SCHEMA,
             system=self._system(pillar, include_style=False), effort="low"))
@@ -401,6 +430,39 @@ Antworte als JSON:
         if missing:
             raise ClaudeError(f"SEO draft missing keys: {missing}")
         return draft
+
+    async def editor_pass(self, draft: dict, pillar: str) -> dict:
+        """Pass 4 — read the finished article as an editor would and improve it.
+
+        Requested by the reviewer (2026-08-24): the mechanical checks catch rule
+        violations, not clumsy phrasing, repetition or a text that simply reads badly.
+        """
+        prompt = f"""Lies diesen fertigen Artikel als erfahrene Redakteurin und
+verbessere ihn. Du bist die letzte Instanz vor der Veröffentlichung.
+
+Achte besonders auf:
+- Holprige oder steife Formulierungen — schreibe sie natürlicher.
+- Wortwiederholungen und wiederkehrende Signalwörter in aufeinanderfolgenden Absätzen.
+- Übergänge zwischen Abschnitten: Liest sich der Text als Ganzes flüssig?
+- Passagen, die belehrend klingen („Bevor wir zur Lösung kommen …“) — formuliere sie
+  einladend aus Sicht des Lesers.
+- Produktplatzierung: Wirkt ein Abschnitt wie ein angehängter Werbeblock? Dann
+  verteile die Produktinformation sinnvoll im Text.
+- Aussagen, die dem Leser eine Hürde bauen oder ihm etwas aufdrängen.
+- Sachliche Fehler oder Angaben ohne belastbare Quelle: streiche oder entschärfe sie
+  und trage sie in „uncertain_facts“ ein.
+
+Erhalte Struktur, Länge und Keywords. Ändere nur, was den Text wirklich besser macht.
+
+Titel: {draft.get('title_a')}
+Meta: {draft.get('summary')}
+{draft.get('body_html')}
+
+Antworte als JSON mit denselben Keys (title_a, title_b, outline, body_html, summary,
+tags, uncertain_facts)."""
+        return self._claude._parse_json(await self._claude._ask(
+            prompt, max_tokens=32000, output_schema=SEO_ARTICLE_SCHEMA,
+            system=self._system(pillar), effort="low"))
 
     async def apply_keywords(self, draft: dict, focus_keyword: str, supporting: list,
                              pillar: str, internal_links: list = None) -> dict:
@@ -436,8 +498,8 @@ Titel: {draft.get('title_a')}
 {draft.get('body_html')}
 
 Antworte als JSON mit denselben Keys (title_a, title_b, outline, body_html, summary,
-tags). Die Meta-Beschreibung („summary“) bleibt eine inhaltliche Zusammenfassung mit
-120–156 Zeichen, ohne Werbesprache."""
+tags, uncertain_facts). Die Meta-Beschreibung („summary“) bleibt eine inhaltliche
+Zusammenfassung mit 120–156 Zeichen, ohne Werbesprache."""
         return self._claude._parse_json(await self._claude._ask(
             prompt, max_tokens=32000, output_schema=SEO_ARTICLE_SCHEMA,
             system=self._system(pillar), effort="low"))
@@ -465,7 +527,7 @@ Wichtig bei der Überarbeitung:
 um andere Regeln zu erfüllen — erweitere stattdessen die Inhalte mit echtem Mehrwert.
 
 Antworte als JSON mit denselben Keys wie zuvor (title_a, title_b, outline, body_html, \
-summary, tags)."""
+summary, tags, uncertain_facts)."""
         revised = self._claude._parse_json(await self._claude._ask(
             prompt, max_tokens=32000, output_schema=SEO_ARTICLE_SCHEMA,
             system=self._system(pillar), effort="low"))
@@ -497,6 +559,10 @@ summary, tags)."""
             await on_progress("Keywords und Links einarbeiten …", [])
         draft = await self.apply_keywords(draft, focus_keyword, supporting, pillar,
                                           internal_links)
+
+        if on_progress:
+            await on_progress("Redaktionelle Überarbeitung …", [])
+        draft = await self.editor_pass(draft, pillar)
 
         findings = style_check.check(draft.get("body_html", ""), focus_keyword,
                                      draft.get("summary", ""))

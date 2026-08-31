@@ -406,6 +406,12 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int):
 
     header = (f"🔑 {md_escape(kw.keyword)} · {words} Wörter · Dichte {density}%\n"
               f"📂 {md_escape(pillar)}")
+
+    # Facts the writer was unsure about: a human must verify these before publishing.
+    uncertain = draft_data.get("uncertain_facts") or []
+    if uncertain:
+        header += ("\n\n⚠️ *Bitte prüfen:*\n"
+                   + "\n".join(f"• {md_escape(str(u))}" for u in uncertain[:6]))
     await msg.reply_text(
         header + "\n\n" + preview_text(draft, admin_url, findings),
         reply_markup=preview_keyboard(draft_id), parse_mode="Markdown",
