@@ -349,7 +349,7 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
     """Run the three-pass SEO pipeline and file the result as a Shopify draft."""
     services = context.bot_data["services"]
     msg = update.effective_message
-    status = await msg.reply_text(f"✍️ Writing „{kw.keyword}“ …")
+    status = await msg.reply_text(f"✍️ Writing \u201e{kw.keyword}\u201c …")
 
     if proposal and proposal.get("supporting_keywords"):
         supporting = proposal["supporting_keywords"][:8]
@@ -418,7 +418,7 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
     # Facts the writer was unsure about: a human must verify these before publishing.
     uncertain = draft_data.get("uncertain_facts") or []
     if uncertain:
-        header += ("\n\n⚠️ *Bitte prüfen:*\n"
+        header += ("\n\n⚠️ *Please verify:*\n"
                    + "\n".join(f"• {md_escape(str(u))}" for u in uncertain[:6]))
     await msg.reply_text(
         header + "\n\n" + preview_text(draft, admin_url, findings),
@@ -463,10 +463,10 @@ async def _offer_images(msg, services, draft_id: str, keyword: str, pillar: str)
 
     if not picks:
         await msg.reply_text(
-            "🖼 Kein passendes Mockup in _All Mockups gefunden.\n\n"
-            f"Vorschlag für ein neues Bild:\n_{md_escape(image_brief(keyword, pillar))}_",
+            "🖼 No suitable mockup found in _All Mockups.\n\n"
+            f"Suggested image to create:\n_{md_escape(image_brief(keyword, pillar))}_",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-                "🎨 Bild generieren lassen", callback_data=f"blog:genimg:{draft_id}")]]),
+                "🎨 Generate an image", callback_data=f"blog:genimg:{draft_id}")]]),
             parse_mode="Markdown")
         return
 
@@ -478,14 +478,14 @@ async def _offer_images(msg, services, draft_id: str, keyword: str, pillar: str)
         except Exception:
             continue
         media.append(InputMediaPhoto(data, caption=f"{n}. {pick['name'][:180]}"))
-        buttons.append([InlineKeyboardButton(f"✅ Bild {n} verwenden",
+        buttons.append([InlineKeyboardButton(f"✅ Use image {n}",
                                              callback_data=f"blog:useimg:{draft_id}:{n}")])
     if not media:
         return
     await msg.reply_media_group(media)
-    buttons.append([InlineKeyboardButton("🎨 Stattdessen generieren",
+    buttons.append([InlineKeyboardButton("🎨 Generate instead",
                                          callback_data=f"blog:genimg:{draft_id}")])
-    await msg.reply_text("🖼 Passende Mockups — welches soll in den Artikel?",
+    await msg.reply_text("🖼 Matching mockups — which one for the article?",
                          reply_markup=InlineKeyboardMarkup(buttons))
 
 
@@ -495,7 +495,7 @@ BATCH_SIZE = 3
 
 
 def proposals_text(proposals: list, pillar: str) -> str:
-    lines = [f"📋 *{md_escape(pillar)}* — {len(proposals)} Vorschläge\n"]
+    lines = [f"📋 *{md_escape(pillar)}* — {len(proposals)} proposals\n"]
     for n, p in enumerate(proposals, 1):
         lines.append(
             f"*{n}. {md_escape(p['title'])}*\n"
@@ -506,12 +506,12 @@ def proposals_text(proposals: list, pillar: str) -> str:
 
 
 def batch_keyboard(batch_id: str, count: int) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton("✅ Alle freigeben und schreiben",
+    rows = [[InlineKeyboardButton("✅ Approve all & write",
                                   callback_data=f"blog:bstart:{batch_id}")]]
-    rows.append([InlineKeyboardButton(f"🔄 Nr. {n} ersetzen",
+    rows.append([InlineKeyboardButton(f"🔄 Replace #{n}",
                                       callback_data=f"blog:bswap:{batch_id}:{n}")
                  for n in range(1, count + 1)])
-    rows.append([InlineKeyboardButton("❌ Abbrechen",
+    rows.append([InlineKeyboardButton("❌ Cancel",
                                       callback_data=f"blog:bcancel:{batch_id}")])
     return InlineKeyboardMarkup(rows)
 
@@ -528,13 +528,13 @@ async def _start_batch(update, context, user_id: int, pillar: str = None):
     used = services.db.used_keywords()
     ranked = services.keywords.ranked(pillar, used)
     if not ranked:
-        await msg.reply_text(f"✅ „{pillar}“ ist vollständig abgedeckt.",
+        await msg.reply_text(f"✅ \u201e{pillar}\u201c is fully covered.",
                              reply_markup=blog_menu_keyboard())
         return
 
     picks = ranked[:BATCH_SIZE]
     status = await msg.reply_text(
-        f"📋 Erstelle {len(picks)} Vorschläge für „{pillar}“ …")
+        f"📋 Creating {len(picks)} proposals for \u201e{pillar}\u201c …")
     try:
         proposals = await propose_articles(
             services.claude, picks, pillar,
@@ -543,7 +543,7 @@ async def _start_batch(update, context, user_id: int, pillar: str = None):
         await status.edit_text(f"❌ Claude error: {e}")
         return
     if not proposals:
-        await status.edit_text("❌ Keine Vorschläge erhalten — bitte erneut versuchen.")
+        await status.edit_text("❌ No proposals returned — please try again.")
         return
 
     batch_id = services.db.create_batch(user_id, pillar, proposals)
@@ -567,14 +567,14 @@ async def _run_next_in_batch(update, context, batch_id: str, user_id: int):
     if index >= len(proposals):
         services.db.update_batch(batch_id, status="done")
         await update.effective_message.reply_text(
-            f"🎉 Batch fertig — {len(proposals)} Artikel bearbeitet.",
+            f"🎉 Batch complete — {len(proposals)} articles processed.",
             reply_markup=blog_menu_keyboard())
         return
 
     proposal = proposals[index]
     kw = _KeywordLike(proposal["keyword"])
     await update.effective_message.reply_text(
-        f"✍️ Artikel {index + 1}/{len(proposals)}: *{md_escape(proposal['title'])}*",
+        f"✍️ Article {index + 1}/{len(proposals)}: *{md_escape(proposal['title'])}*",
         parse_mode="Markdown")
     services.db.update_batch(batch_id, status="running")
     await _write_from_keyword(update, context, batch["pillar"], kw, user_id,
@@ -598,12 +598,12 @@ async def scheduled_batch(context, user_id: int):
     pillars = [(n, p) for n, p in pillars if n]
     if not pillars:
         await context.bot.send_message(
-            user_id, "⚠️ Alle Keywords sind aufgebraucht — bitte die Tabelle ergänzen.")
+            user_id, "⚠️ All keywords are used up — please add more to the sheet.")
         return
     remaining, pillar = max(pillars)
 
     sent = await context.bot.send_message(
-        user_id, f"🗓 Wochen-Batch: erstelle Vorschläge für „{pillar}“ …")
+        user_id, f"🗓 Weekly batch: creating proposals for \u201e{pillar}\u201c …")
 
     class _Shim:                      # gives _start_batch something to reply to
         effective_message = sent
@@ -613,8 +613,8 @@ async def scheduled_batch(context, user_id: int):
     if remaining <= BATCH_SIZE * 2:   # warn before a pillar runs dry
         await context.bot.send_message(
             user_id,
-            f"ℹ️ „{pillar}“ hat nur noch {remaining} Keywords. "
-            "Bitte die Tabelle bald ergänzen.")
+            f"ℹ️ \u201e{pillar}\u201c has only {remaining} keywords left. "
+            "Please top up the sheet soon.")
 
 
 class _KeywordLike:
@@ -643,19 +643,19 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if action == "batch":
-        await query.edit_message_text("▶️ Starte Wochen-Batch …")
+        await query.edit_message_text("▶️ Starting weekly batch …")
         await _start_batch(update, context, user_id)
         return
 
     if action == "bstart":
         batch = services.db.get_batch(arg)
         if batch is None:
-            await query.edit_message_text("⚠️ Dieser Batch existiert nicht mehr.",
+            await query.edit_message_text("⚠️ This batch no longer exists.",
                                           reply_markup=blog_menu_keyboard())
             return
         services.db.log_audit(user_id, "batch_approved", arg, "ok", "")
         await query.edit_message_text(
-            f"✅ Freigegeben — schreibe {len(batch['proposals'])} Artikel nacheinander.")
+            f"✅ Approved — writing {len(batch['proposals'])} articles one after another.")
         await _run_next_in_batch(update, context, arg, user_id)
         return
 
@@ -663,7 +663,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = (arg or "").split(":")
         batch = services.db.get_batch(parts[0]) if parts else None
         if batch is None or len(parts) < 2:
-            await query.edit_message_text("⚠️ Dieser Batch existiert nicht mehr.",
+            await query.edit_message_text("⚠️ This batch no longer exists.",
                                           reply_markup=blog_menu_keyboard())
             return
         n = int(parts[1]) - 1
@@ -673,9 +673,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         used = services.db.used_keywords() | chosen
         ranked = services.keywords.ranked(batch["pillar"], used)
         if not ranked or not (0 <= n < len(proposals)):
-            await query.answer("Kein weiteres Keyword verfügbar", show_alert=True)
+            await query.answer("No further keyword available", show_alert=True)
             return
-        await query.edit_message_text("🔄 Erstelle Ersatz-Vorschlag …")
+        await query.edit_message_text("🔄 Creating replacement proposal …")
         try:
             new = await propose_articles(
                 services.claude, ranked[:1], batch["pillar"],
@@ -697,7 +697,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "bcancel":
         services.db.update_batch(arg, status="cancelled")
         services.db.log_audit(user_id, "batch_cancelled", arg, "ok", "")
-        await query.edit_message_text("❌ Batch abgebrochen.",
+        await query.edit_message_text("❌ Batch cancelled.",
                                       reply_markup=blog_menu_keyboard())
         return
 
