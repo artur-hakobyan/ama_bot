@@ -6,7 +6,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from bot.auth import authorized
-from bot.claude_client import ClaudeError, classify_feedback
+from bot.claude_client import (ClaudeError, classify_feedback,
+                               propose_articles)
 from bot.shopify_client import ShopifyError
 
 logger = logging.getLogger(__name__)
@@ -145,6 +146,7 @@ def blog_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🆕 New article", callback_data="blog:new")],
         [InlineKeyboardButton("📊 From keyword sheet", callback_data="blog:pillars")],
+        [InlineKeyboardButton("▶️ Run weekly batch now", callback_data="blog:batch")],
         [InlineKeyboardButton("✏️ Edit existing", callback_data="blog:listedit")],
         [InlineKeyboardButton("🗑 Delete existing", callback_data="blog:listdel")],
         [InlineKeyboardButton("⬅️ Back", callback_data="main:menu")],
@@ -342,14 +344,18 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
 
 # --- keyword-sheet flow -------------------------------------------------------
 
-async def _write_from_keyword(update, context, pillar: str, kw, user_id: int):
+async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
+                              proposal: dict = None, batch_id: str = None):
     """Run the three-pass SEO pipeline and file the result as a Shopify draft."""
     services = context.bot_data["services"]
     msg = update.effective_message
     status = await msg.reply_text(f"✍️ Writing „{kw.keyword}“ …")
 
-    ranked = services.keywords.ranked(pillar, services.db.used_keywords())
-    supporting = [k.keyword for k in ranked if k.keyword != kw.keyword][:8]
+    if proposal and proposal.get("supporting_keywords"):
+        supporting = proposal["supporting_keywords"][:8]
+    else:
+        ranked = services.keywords.ranked(pillar, services.db.used_keywords())
+        supporting = [k.keyword for k in ranked if k.keyword != kw.keyword][:8]
 
     # Only link to articles that are actually live, so links never 404.
     links = []
@@ -382,6 +388,8 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int):
         draft_data["body_html"], draft_data["summary"], draft_data["tags"])
     ctx = services.db.get_session(user_id)["context"]
     ctx.update({"keyword": kw.keyword, "pillar": pillar})
+    if batch_id:
+        ctx["batch_id"] = batch_id
     services.db.set_step(user_id, None, ctx)
 
     admin_url = None
@@ -481,6 +489,143 @@ async def _offer_images(msg, services, draft_id: str, keyword: str, pillar: str)
                          reply_markup=InlineKeyboardMarkup(buttons))
 
 
+# --- weekly batch -------------------------------------------------------------
+
+BATCH_SIZE = 3
+
+
+def proposals_text(proposals: list, pillar: str) -> str:
+    lines = [f"📋 *{md_escape(pillar)}* — {len(proposals)} Vorschläge\n"]
+    for n, p in enumerate(proposals, 1):
+        lines.append(
+            f"*{n}. {md_escape(p['title'])}*\n"
+            f"🔑 {md_escape(p['keyword'])}\n"
+            f"_{md_escape(p.get('value', ''))}_\n"
+            + "\n".join(f"  • {md_escape(o)}" for o in p.get("outline", [])[:6]))
+    return "\n\n".join(lines)
+
+
+def batch_keyboard(batch_id: str, count: int) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("✅ Alle freigeben und schreiben",
+                                  callback_data=f"blog:bstart:{batch_id}")]]
+    rows.append([InlineKeyboardButton(f"🔄 Nr. {n} ersetzen",
+                                      callback_data=f"blog:bswap:{batch_id}:{n}")
+                 for n in range(1, count + 1)])
+    rows.append([InlineKeyboardButton("❌ Abbrechen",
+                                      callback_data=f"blog:bcancel:{batch_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _start_batch(update, context, user_id: int, pillar: str = None):
+    """Pick the next keywords and propose three articles for approval."""
+    services = context.bot_data["services"]
+    msg = update.effective_message
+    if not services.keywords:
+        await msg.reply_text("⚠️ Keyword sheet not available.")
+        return
+
+    pillar = pillar or services.keywords.pillars[0]
+    used = services.db.used_keywords()
+    ranked = services.keywords.ranked(pillar, used)
+    if not ranked:
+        await msg.reply_text(f"✅ „{pillar}“ ist vollständig abgedeckt.",
+                             reply_markup=blog_menu_keyboard())
+        return
+
+    picks = ranked[:BATCH_SIZE]
+    status = await msg.reply_text(
+        f"📋 Erstelle {len(picks)} Vorschläge für „{pillar}“ …")
+    try:
+        proposals = await propose_articles(
+            services.claude, picks, pillar,
+            services.rules.as_prompt_block() if services.rules else "")
+    except ClaudeError as e:
+        await status.edit_text(f"❌ Claude error: {e}")
+        return
+    if not proposals:
+        await status.edit_text("❌ Keine Vorschläge erhalten — bitte erneut versuchen.")
+        return
+
+    batch_id = services.db.create_batch(user_id, pillar, proposals)
+    services.db.log_audit(user_id, "batch_proposed", pillar, "ok",
+                          f"{len(proposals)} proposals")
+    await status.edit_text(proposals_text(proposals, pillar),
+                           reply_markup=batch_keyboard(batch_id, len(proposals)),
+                           parse_mode="Markdown")
+
+
+async def _run_next_in_batch(update, context, batch_id: str, user_id: int):
+    """Write the next approved article. Sequential: one at a time, by design —
+    the operator should never have two drafts awaiting review."""
+    services = context.bot_data["services"]
+    batch = services.db.get_batch(batch_id)
+    if batch is None:
+        return
+    proposals = batch["proposals"]
+    index = batch["current_index"]
+
+    if index >= len(proposals):
+        services.db.update_batch(batch_id, status="done")
+        await update.effective_message.reply_text(
+            f"🎉 Batch fertig — {len(proposals)} Artikel bearbeitet.",
+            reply_markup=blog_menu_keyboard())
+        return
+
+    proposal = proposals[index]
+    kw = _KeywordLike(proposal["keyword"])
+    await update.effective_message.reply_text(
+        f"✍️ Artikel {index + 1}/{len(proposals)}: *{md_escape(proposal['title'])}*",
+        parse_mode="Markdown")
+    services.db.update_batch(batch_id, status="running")
+    await _write_from_keyword(update, context, batch["pillar"], kw, user_id,
+                              proposal=proposal, batch_id=batch_id)
+
+
+async def scheduled_batch(context, user_id: int):
+    """Weekly entry point. Unlike the button flow there is no message to reply
+    to, so it sends a fresh one and picks the pillar with the most keywords left.
+    """
+    services = context.bot_data["services"]
+    if not services.keywords:
+        return
+    if services.db.active_batch(user_id):
+        logger.info("Skipping weekly batch for %s — one is still open", user_id)
+        return
+
+    used = services.db.used_keywords()
+    pillars = [(services.keywords.remaining(p, used), p)
+               for p in services.keywords.pillars]
+    pillars = [(n, p) for n, p in pillars if n]
+    if not pillars:
+        await context.bot.send_message(
+            user_id, "⚠️ Alle Keywords sind aufgebraucht — bitte die Tabelle ergänzen.")
+        return
+    remaining, pillar = max(pillars)
+
+    sent = await context.bot.send_message(
+        user_id, f"🗓 Wochen-Batch: erstelle Vorschläge für „{pillar}“ …")
+
+    class _Shim:                      # gives _start_batch something to reply to
+        effective_message = sent
+
+    await _start_batch(_Shim(), context, user_id, pillar)
+
+    if remaining <= BATCH_SIZE * 2:   # warn before a pillar runs dry
+        await context.bot.send_message(
+            user_id,
+            f"ℹ️ „{pillar}“ hat nur noch {remaining} Keywords. "
+            "Bitte die Tabelle bald ergänzen.")
+
+
+class _KeywordLike:
+    """Minimal stand-in so batch articles reuse the single-article writer."""
+
+    def __init__(self, keyword: str, volume: int = 0, competition: str = ""):
+        self.keyword = keyword
+        self.volume = volume
+        self.competition = competition
+
+
 # --- callbacks ---------------------------------------------------------------
 
 @authorized
@@ -494,6 +639,65 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "menu":
         services.db.set_step(user_id, None, {})
         await query.edit_message_text("📝 Blog — choose an action:",
+                                      reply_markup=blog_menu_keyboard())
+        return
+
+    if action == "batch":
+        await query.edit_message_text("▶️ Starte Wochen-Batch …")
+        await _start_batch(update, context, user_id)
+        return
+
+    if action == "bstart":
+        batch = services.db.get_batch(arg)
+        if batch is None:
+            await query.edit_message_text("⚠️ Dieser Batch existiert nicht mehr.",
+                                          reply_markup=blog_menu_keyboard())
+            return
+        services.db.log_audit(user_id, "batch_approved", arg, "ok", "")
+        await query.edit_message_text(
+            f"✅ Freigegeben — schreibe {len(batch['proposals'])} Artikel nacheinander.")
+        await _run_next_in_batch(update, context, arg, user_id)
+        return
+
+    if action == "bswap":
+        parts = (arg or "").split(":")
+        batch = services.db.get_batch(parts[0]) if parts else None
+        if batch is None or len(parts) < 2:
+            await query.edit_message_text("⚠️ Dieser Batch existiert nicht mehr.",
+                                          reply_markup=blog_menu_keyboard())
+            return
+        n = int(parts[1]) - 1
+        proposals = batch["proposals"]
+        # Swap in the next unused keyword that isn't already in this batch.
+        chosen = {p["keyword"].lower() for p in proposals}
+        used = services.db.used_keywords() | chosen
+        ranked = services.keywords.ranked(batch["pillar"], used)
+        if not ranked or not (0 <= n < len(proposals)):
+            await query.answer("Kein weiteres Keyword verfügbar", show_alert=True)
+            return
+        await query.edit_message_text("🔄 Erstelle Ersatz-Vorschlag …")
+        try:
+            new = await propose_articles(
+                services.claude, ranked[:1], batch["pillar"],
+                services.rules.as_prompt_block() if services.rules else "")
+        except ClaudeError as e:
+            await query.edit_message_text(f"❌ Claude error: {e}")
+            return
+        if new:
+            proposals[n] = new[0]
+            import json as _json
+            services.db.update_batch(parts[0],
+                                     proposals_json=_json.dumps(proposals))
+        await query.edit_message_text(
+            proposals_text(proposals, batch["pillar"]),
+            reply_markup=batch_keyboard(parts[0], len(proposals)),
+            parse_mode="Markdown")
+        return
+
+    if action == "bcancel":
+        services.db.update_batch(arg, status="cancelled")
+        services.db.log_audit(user_id, "batch_cancelled", arg, "ok", "")
+        await query.edit_message_text("❌ Batch abgebrochen.",
                                       reply_markup=blog_menu_keyboard())
         return
 
@@ -680,6 +884,11 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         services.db.update_draft(arg, status="published")
         services.db.log_audit(user_id, "publish", gid, "ok", article["handle"])
+
+        # A published keyword is spent: never propose it again.
+        ctx = services.db.get_session(user_id)["context"]
+        if ctx.get("keyword"):
+            services.db.mark_keyword_used(ctx["keyword"], ctx.get("pillar", ""), gid)
         try:
             blog_handle, _ = await services.shopify.list_articles(
                 services.config.blog_id, first=1)
@@ -689,6 +898,16 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"✅ Published: *{md_escape(chosen_title(draft))}*\n{live}",
             parse_mode="Markdown")
+
+        # Sequential batch: the next article starts only now, so the operator
+        # never has two drafts waiting at once.
+        batch_id = ctx.get("batch_id")
+        if batch_id:
+            batch = services.db.get_batch(batch_id)
+            if batch and batch["status"] == "running":
+                services.db.update_batch(batch_id,
+                                         current_index=batch["current_index"] + 1)
+                await _run_next_in_batch(update, context, batch_id, user_id)
 
     elif action == "regen":
         session = services.db.get_session(user_id)

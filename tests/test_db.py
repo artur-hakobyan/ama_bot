@@ -60,3 +60,26 @@ def test_keyword_usage_tracking(db):
     assert used == {"absorber büro", "akustik büro"}   # normalised to lowercase
     db.mark_keyword_used("Absorber Büro", "Akustik im Büro")   # idempotent
     assert len(db.used_keywords()) == 2
+
+
+def test_batch_lifecycle(db):
+    proposals = [{"keyword": "absorber büro", "title": "T1"},
+                 {"keyword": "akustik büro", "title": "T2"}]
+    bid = db.create_batch(42, "Akustik im Büro", proposals)
+    b = db.get_batch(bid)
+    assert b["proposals"] == proposals and b["current_index"] == 0
+    assert b["status"] == "proposed"
+
+    assert db.active_batch(42)["id"] == bid          # findable while open
+    db.update_batch(bid, current_index=1, status="running")
+    assert db.get_batch(bid)["current_index"] == 1
+
+    db.update_batch(bid, status="done")
+    assert db.active_batch(42) is None               # finished batches drop out
+
+
+def test_update_batch_rejects_unknown_column(db):
+    bid = db.create_batch(1, "P", [])
+    import pytest
+    with pytest.raises(ValueError):
+        db.update_batch(bid, evil="x")

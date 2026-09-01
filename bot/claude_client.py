@@ -375,10 +375,15 @@ class SEOWriter:
     """Long-form SEO articles: draft, mechanically check, revise until clean."""
 
     MAX_REVISIONS = 2
+    # Fixing an explicit list of violations is instruction-following, not
+    # creative work, so it runs on a cheaper model. Writing, keyword placement
+    # and the editorial pass stay on the main model.
+    FIX_MODEL = "claude-haiku-4-5"
 
-    def __init__(self, claude: "ClaudeClient", house_rules=None):
+    def __init__(self, claude: "ClaudeClient", house_rules=None, fix_claude=None):
         self._claude = claude
         self._rules = house_rules
+        self._fixer = fix_claude or claude
 
     def _system(self, pillar: str, include_style: bool = True) -> str:
         block = self._rules.as_prompt_block() if self._rules else ""
@@ -528,7 +533,7 @@ Wichtig bei der Überarbeitung:
 
 Antworte als JSON mit denselben Keys wie zuvor (title_a, title_b, outline, body_html, \
 summary, tags, uncertain_facts)."""
-        revised = self._claude._parse_json(await self._claude._ask(
+        revised = self._fixer._parse_json(await self._fixer._ask(
             prompt, max_tokens=32000, output_schema=SEO_ARTICLE_SCHEMA,
             system=self._system(pillar), effort="low"))
         return revised
@@ -609,3 +614,65 @@ Antworte als JSON: {{"is_general_rule": true/false, "rule_text": "…", "reason"
     result = claude._parse_json(await claude._ask(
         prompt, max_tokens=1024, output_schema=RULE_SCHEMA))
     return result
+
+
+PROPOSALS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "proposals": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string"},
+                    "title": {"type": "string"},
+                    "outline": {"type": "array", "items": {"type": "string"}},
+                    "supporting_keywords": {"type": "array",
+                                            "items": {"type": "string"}},
+                    "value": {"type": "string"},
+                },
+                "required": ["keyword", "title", "outline",
+                             "supporting_keywords", "value"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["proposals"],
+    "additionalProperties": False,
+}
+
+
+async def propose_articles(claude: "ClaudeClient", keywords: list, pillar: str,
+                           house_rules_block: str = "") -> list:
+    """Titles and outlines for a batch, in one call.
+
+    One request for all three keeps the weekly run cheap: proposals are short, and
+    a separate call per article would triple the cost of a step the operator may
+    reject anyway.
+    """
+    kw_lines = "\n".join(
+        f"- {k.keyword} ({k.volume}/Monat, Wettbewerb {k.competition or 'unbekannt'})"
+        for k in keywords)
+    prompt = f"""Entwickle für jedes dieser Keywords einen Blogartikel-Vorschlag.
+Noch kein fertiger Text — nur Titel, Gliederung und Neben-Keywords.
+
+Pillar-Thema: {pillar}
+Keywords:
+{kw_lines}
+
+Für jeden Vorschlag:
+- „title“: Der Titel enthält das Fokus-Keyword wortwörtlich. Kein Clickbait.
+- „outline“: 5–7 Abschnitte als kurze Stichpunkte.
+- „supporting_keywords“: 5–10 thematisch passende Neben-Keywords.
+- „value“: Ein Satz — welchen konkreten Nutzen hat der Leser von diesem Artikel?
+
+Prüfe dich selbst: Bietet jeder Artikel echten Mehrwert für die Zielgruppe?
+Falls nicht, wähle einen anderen Blickwinkel.
+
+Antworte als JSON: {{"proposals": [{{"keyword": "...", "title": "...",
+"outline": ["..."], "supporting_keywords": ["..."], "value": "..."}}]}}"""
+    system = _seo_system_prompt(pillar, house_rules_block, include_style=False)
+    result = claude._parse_json(await claude._ask(
+        prompt, max_tokens=4096, output_schema=PROPOSALS_SCHEMA, system=system,
+        effort="low"))
+    return result.get("proposals", [])

@@ -148,6 +148,18 @@ async def _register_commands(app: Application):
     ])
 
 
+async def weekly_batch_job(context: ContextTypes.DEFAULT_TYPE):
+    """Tuesday 18:00 Yerevan: propose the week's articles to every operator."""
+    services = context.bot_data["services"]
+    from bot.modules.blog import scheduled_batch
+    for user_id in sorted(services.config.allowlist_user_ids):
+        try:
+            await scheduled_batch(context, user_id)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Weekly batch failed for %s", user_id)
+
+
 def build_application(services: Services, modules) -> Application:
     app = (Application.builder()
            .token(services.config.telegram_bot_token)
@@ -165,6 +177,15 @@ def build_application(services: Services, modules) -> Application:
         mod.register(app)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
     app.add_error_handler(error_handler)
+
+    # Weekly run: Tuesday 18:00 Yerevan (UTC+4, no DST).
+    if app.job_queue is not None:
+        import datetime as _dt
+        yerevan = _dt.timezone(_dt.timedelta(hours=4))
+        app.job_queue.run_daily(weekly_batch_job,
+                                time=_dt.time(18, 0, tzinfo=yerevan),
+                                days=(1,),           # Monday=0, so Tuesday=1
+                                name="weekly_batch")
     return app
 
 
@@ -187,7 +208,9 @@ def main():
             services.google = GoogleClient(cfg.google_credentials_path)
         except Exception as e:
             logging.getLogger(__name__).warning("Google access unavailable: %s", e)
-    services.writer = SEOWriter(services.claude, services.rules)
+    services.writer = SEOWriter(
+        services.claude, services.rules,
+        fix_claude=ClaudeClient(cfg.anthropic_api_key, SEOWriter.FIX_MODEL))
     # The live sheet is authoritative — the operator edits it directly. The local
     # workbook is only a fallback when Google is unreachable.
     if services.google and cfg.keyword_spreadsheet_id:

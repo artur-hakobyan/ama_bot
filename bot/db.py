@@ -29,6 +29,15 @@ CREATE TABLE IF NOT EXISTS keywords_used (
   article_gid TEXT,
   used_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS batches (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  pillar TEXT NOT NULL,
+  proposals_json TEXT NOT NULL DEFAULT '[]',
+  current_index INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'proposed',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
@@ -136,6 +145,44 @@ class Database:
     def used_keywords(self) -> set:
         rows = self._conn.execute("SELECT keyword FROM keywords_used").fetchall()
         return {r["keyword"] for r in rows}
+
+    # --- weekly batches ---
+    def create_batch(self, user_id: int, pillar: str, proposals: list) -> str:
+        batch_id = secrets.token_hex(4)
+        self._conn.execute(
+            "INSERT INTO batches (id, user_id, pillar, proposals_json)"
+            " VALUES (?, ?, ?, ?)",
+            (batch_id, user_id, pillar, json.dumps(proposals)))
+        self._conn.commit()
+        return batch_id
+
+    def get_batch(self, batch_id: str):
+        row = self._conn.execute(
+            "SELECT * FROM batches WHERE id = ?", (batch_id,)).fetchone()
+        if row is None:
+            return None
+        b = dict(row)
+        b["proposals"] = json.loads(b.pop("proposals_json"))
+        return b
+
+    def update_batch(self, batch_id: str, **fields):
+        allowed = {"current_index", "status", "proposals_json"}
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"Unknown batch columns: {unknown}")
+        if not fields:
+            raise ValueError("update_batch called with no fields")
+        sets = ", ".join(f"{c} = ?" for c in fields)
+        self._conn.execute(f"UPDATE batches SET {sets} WHERE id = ?",
+                           (*fields.values(), batch_id))
+        self._conn.commit()
+
+    def active_batch(self, user_id: int):
+        row = self._conn.execute(
+            "SELECT id FROM batches WHERE user_id = ? AND status IN"
+            " ('proposed','running') ORDER BY created_at DESC LIMIT 1",
+            (user_id,)).fetchone()
+        return self.get_batch(row["id"]) if row else None
 
     # --- audit ---
     def log_audit(self, user_id, action, target, result, detail=""):

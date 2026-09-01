@@ -246,3 +246,49 @@ async def test_demo_mode_list_existing_says_coming_soon(services):
     await blog.callbacks.__wrapped__(u, make_ctx(services))
     services.shopify.list_articles.assert_not_awaited()
     assert "ready soon" in u.callback_query.edit_message_text.await_args.args[0]
+
+
+def test_proposals_text_shows_all_three():
+    props = [{"keyword": "absorber büro", "title": "Titel Eins",
+              "outline": ["A", "B"], "value": "Nutzen eins"},
+             {"keyword": "akustik büro", "title": "Titel Zwei",
+              "outline": ["C"], "value": "Nutzen zwei"}]
+    text = blog.proposals_text(props, "Akustik im Büro")
+    assert "Titel Eins" in text and "Titel Zwei" in text
+    assert "absorber büro" in text and "Nutzen eins" in text
+
+
+def test_batch_keyboard_has_swap_per_proposal():
+    kb = blog.batch_keyboard("abc123", 3)
+    datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "blog:bstart:abc123" in datas
+    assert "blog:bswap:abc123:1" in datas and "blog:bswap:abc123:3" in datas
+    assert "blog:bcancel:abc123" in datas
+
+
+async def test_batch_runs_sequentially(services, monkeypatch):
+    """Article two must not start until article one is published."""
+    proposals = [{"keyword": "kw eins", "title": "T1", "outline": [],
+                  "supporting_keywords": []},
+                 {"keyword": "kw zwei", "title": "T2", "outline": [],
+                  "supporting_keywords": []}]
+    bid = services.db.create_batch(111, "Akustik im Büro", proposals)
+    written = []
+
+    async def fake_write(update, context, pillar, kw, user_id, proposal=None,
+                         batch_id=None):
+        written.append(kw.keyword)
+
+    monkeypatch.setattr(blog, "_write_from_keyword", fake_write)
+    u = make_text_update("x")
+    await blog._run_next_in_batch(u, make_ctx(services), bid, 111)
+    assert written == ["kw eins"]          # only the first has started
+
+    services.db.update_batch(bid, current_index=1)
+    await blog._run_next_in_batch(u, make_ctx(services), bid, 111)
+    assert written == ["kw eins", "kw zwei"]
+
+    services.db.update_batch(bid, current_index=2)
+    await blog._run_next_in_batch(u, make_ctx(services), bid, 111)
+    assert len(written) == 2                       # nothing extra
+    assert services.db.get_batch(bid)["status"] == "done"
