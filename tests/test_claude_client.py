@@ -58,3 +58,18 @@ async def test_draft_article_uses_structured_outputs():
     fmt = create.await_args.kwargs["output_config"]["format"]
     assert fmt["type"] == "json_schema"
     assert "body_html" in fmt["schema"]["properties"]
+
+
+async def test_effort_omitted_for_models_that_reject_it():
+    """Haiku returns 400 for the effort parameter, so it must never be sent."""
+    fake, create = fake_anthropic('{"ok": true, "issues": []}')
+    haiku = ClaudeClient("k", "claude-haiku-4-5", client=fake)
+    await haiku._ask("x", output_schema={"type": "object"}, effort="low")
+    cfg = create.await_args.kwargs.get("output_config", {})
+    assert "effort" not in cfg
+    assert "format" in cfg          # schema still applied
+
+    fake2, create2 = fake_anthropic('{"ok": true, "issues": []}')
+    sonnet = ClaudeClient("k", "claude-sonnet-5", client=fake2)
+    await sonnet._ask("x", output_schema={"type": "object"}, effort="low")
+    assert create2.await_args.kwargs["output_config"]["effort"] == "low"

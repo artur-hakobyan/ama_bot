@@ -88,6 +88,10 @@ class ClaudeClient:
             api_key=api_key, timeout=180.0, max_retries=4)
         self._model = model
 
+    def _supports_effort(self) -> bool:
+        """Effort is a frontier-model parameter; Haiku rejects it with a 400."""
+        return not self._model.startswith("claude-haiku")
+
     async def _ask(self, prompt: str, max_tokens: int = 4096,
                    output_schema: dict | None = None,
                    system: str | None = None, effort: str | None = None) -> str:
@@ -98,9 +102,10 @@ class ClaudeClient:
         output_config = {}
         if output_schema is not None:
             output_config["format"] = {"type": "json_schema", "schema": output_schema}
-        if effort is not None:
-            # A 2000-word article at default effort can spend the whole token
-            # budget on thinking and never emit the text; cap it deliberately.
+        if effort is not None and self._supports_effort():
+            # A long article at default effort can spend the whole token budget
+            # on thinking and never emit the text, so cap it where supported.
+            # Older/smaller models reject the parameter outright (400).
             output_config["effort"] = effort
         if output_config:
             kwargs["output_config"] = output_config
