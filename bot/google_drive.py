@@ -198,19 +198,67 @@ def _article_html(title: str, body_html: str, meta: str, focus: str,
             f"</body></html>").encode("utf-8")
 
 
+FOLDER_MIME = "application/vnd.google-apps.folder"
+
+# Where an article lives at each stage. The operator keeps these folders inside
+# the automation folder; "Draft" is singular on Drive, so match it exactly.
+DRAFT_PATH = ("Blog", "Draft")
+APPROVED_PATH = ("Blog", "Approved")
+
+
 class GoogleDocs:
-    """Creates the review draft as a Google Doc in the automation folder."""
+    """Creates the review draft as a Google Doc, and moves it on approval.
+
+    An article starts in Blog/Draft and moves to Blog/Approved when the operator
+    publishes it, so the folder itself says which articles still need review.
+    """
 
     def __init__(self, google_client: "GoogleClient", folder_id: str):
         self._drive = google_client._drive
         self._folder = folder_id
+        self._folder_cache = {}
+
+    def _subfolder(self, path: tuple) -> str:
+        """Resolve (and create if absent) a folder path under the automation root."""
+        if path in self._folder_cache:
+            return self._folder_cache[path]
+        parent = self._folder
+        for name in path:
+            safe = name.replace("'", "\\'")
+            found = self._drive.files().list(
+                q=(f"'{parent}' in parents and name = '{safe}' and "
+                   f"mimeType = '{FOLDER_MIME}' and trashed = false"),
+                fields="files(id)", pageSize=1,
+                supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
+            files = found.get("files", [])
+            if files:
+                parent = files[0]["id"]
+            else:
+                created = self._drive.files().create(
+                    body={"name": name, "parents": [parent],
+                          "mimeType": FOLDER_MIME},
+                    fields="id", supportsAllDrives=True).execute()
+                parent = created["id"]
+        self._folder_cache[path] = parent
+        return parent
+
+    def move_to_approved(self, file_id: str) -> str:
+        """Move an approved article out of Draft. Returns the new parent id."""
+        target = self._subfolder(APPROVED_PATH)
+        current = self._drive.files().get(
+            fileId=file_id, fields="parents", supportsAllDrives=True).execute()
+        self._drive.files().update(
+            fileId=file_id, addParents=target,
+            removeParents=",".join(current.get("parents", [])),
+            fields="id,parents", supportsAllDrives=True).execute()
+        return target
 
     def create_draft(self, number: int, title: str, body_html: str, meta: str,
                      focus: str, supporting: list, findings: list) -> dict:
         name = doc_name(number, title)
         try:
             return self._drive.files().create(
-                body={"name": name, "parents": [self._folder],
+                body={"name": name, "parents": [self._subfolder(DRAFT_PATH)],
                       "mimeType": "application/vnd.google-apps.document"},
                 media_body=MediaInMemoryUpload(
                     _article_html(title, body_html, meta, focus, supporting,

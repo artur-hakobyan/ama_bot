@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS drafts (
   body_html TEXT,
   summary TEXT,
   doc_url TEXT,
+  doc_file_id TEXT,
   tags_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -52,7 +53,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 DRAFT_COLUMNS = {
     "shopify_article_gid", "chosen_title", "status",
-    "title_a", "title_b", "body_html", "summary", "doc_url",
+    "title_a", "title_b", "body_html", "summary", "doc_url", "doc_file_id",
 }
 
 
@@ -61,7 +62,23 @@ class Database:
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self):
+        """Add columns to a database created by an earlier version.
+
+        CREATE TABLE IF NOT EXISTS leaves an existing table untouched, so new
+        columns have to be added explicitly or a deployed database keeps the old
+        shape and every write to the new column fails.
+        """
+        for table, column, ddl in (
+                ("drafts", "doc_file_id", "TEXT"),):
+            existing = {r["name"] for r in
+                        self._conn.execute(f"PRAGMA table_info({table})")}
+            if column not in existing:
+                self._conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     def close(self):
         self._conn.close()

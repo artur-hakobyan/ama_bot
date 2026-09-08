@@ -412,7 +412,8 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
                 number, draft_data["title_a"], draft_data["body_html"],
                 draft_data["summary"], kw.keyword, supporting, findings)
             doc_url = doc.get("webViewLink")
-            services.db.update_draft(draft_id, doc_url=doc_url)
+            services.db.update_draft(draft_id, doc_url=doc_url,
+                                     doc_file_id=doc.get("id"))
             services.db.log_audit(user_id, "doc_created", doc.get("name", ""), "ok",
                                   doc_url or "")
         except DriveQuotaError as e:
@@ -925,6 +926,19 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         services.db.update_draft(arg, status="published")
         services.db.log_audit(user_id, "publish", gid, "ok", article["handle"])
+
+        # The Drive folder mirrors the review state: an approved article leaves
+        # Blog/Draft so what is left there is exactly what still needs review.
+        doc_file_id = draft.get("doc_file_id")
+        if services.docs is not None and doc_file_id:
+            try:
+                services.docs.move_to_approved(doc_file_id)
+                services.db.log_audit(user_id, "doc_approved", doc_file_id, "ok",
+                                      "moved to Blog/Approved")
+            except Exception as e:
+                logger.warning("Could not move doc to Approved: %s", e)
+                services.db.log_audit(user_id, "doc_approved", doc_file_id,
+                                      "error", str(e)[:200])
 
         # A published keyword is spent: never propose it again.
         ctx = services.db.get_session(user_id)["context"]
