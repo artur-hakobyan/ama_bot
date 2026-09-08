@@ -372,6 +372,13 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
         ctx["must"] = text
         services.db.set_step(user_id, None, ctx)
         await _create_and_preview(update, context, ctx, user_id)
+    elif step == "blog:swaphint":
+        services.db.set_step(user_id, None, ctx)
+        await _swap_proposal(update, context, ctx.get("batch_id"),
+                             ctx.get("swap_index"), text, user_id)
+    elif step == "blog:batchfeedback":
+        services.db.set_step(user_id, None, ctx)
+        await _redo_proposals(update, context, ctx.get("batch_id"), text, user_id)
     elif step == "blog:editdraft":
         draft_id = ctx.get("draft_id")
         draft = services.db.get_draft(draft_id) if draft_id else None
@@ -635,6 +642,10 @@ def proposals_text(proposals: list, pillar: str) -> str:
             f"🔑 {md_escape(p['keyword'])}\n"
             f"_{md_escape(p.get('value', ''))}_\n"
             + "\n".join(f"  • {md_escape(o)}" for o in p.get("outline", [])[:6]))
+    # The buttons are not the only way in: a reviewer's first instinct is to
+    # type what they want changed, and that used to reach nothing at all.
+    lines.append("💬 _Or just write what you want changed — e.g. „vary the "
+                 "topics more, don\'t explain the basics every time“._")
     return "\n\n".join(lines)
 
 
@@ -647,6 +658,146 @@ def batch_keyboard(batch_id: str, count: int) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("❌ Cancel",
                                       callback_data=f"blog:bcancel:{batch_id}")])
     return InlineKeyboardMarkup(rows)
+
+
+async def _swap_proposal(update, context, batch_id, index, instruction: str,
+                         user_id: int):
+    """Replace one proposal, steered by what the reviewer asked for."""
+    services = context.bot_data["services"]
+    msg = update.effective_message
+    batch = services.db.get_batch(batch_id) if batch_id else None
+    if batch is None or index is None:
+        await msg.reply_text("⚠️ This batch no longer exists.",
+                             reply_markup=blog_menu_keyboard())
+        return
+    proposals = batch["proposals"]
+    guidance = "" if instruction.strip() in ("-", "—") else instruction.strip()
+
+    # Keep the same keyword when the reviewer asked for a different angle: they
+    # rejected the treatment, not the search term. Only "-" means "next keyword".
+    chosen = {p["keyword"].lower() for p in proposals}
+    if guidance:
+        picks = [_keyword_for(services, batch["pillar"], proposals[index]["keyword"])]
+    else:
+        ranked = services.keywords.ranked(
+            batch["pillar"], services.db.used_keywords() | chosen)
+        if not ranked:
+            await msg.reply_text("⚠️ No further keyword available.",
+                                 reply_markup=blog_menu_keyboard())
+            return
+        picks = ranked[:1]
+    if picks[0] is None:
+        await msg.reply_text("⚠️ Keyword no longer in the sheet.",
+                             reply_markup=blog_menu_keyboard())
+        return
+
+    status = await msg.reply_text("🔄 Creating replacement proposal …")
+    spinner = Progress(status, f"🔄 Replacing #{index + 1}", eta_seconds=30)
+    try:
+        async with spinner:
+            new = await propose_articles(
+                services.claude, picks, batch["pillar"],
+                services.rules.as_prompt_block() if services.rules else "",
+                guidance=guidance,
+                avoid=[proposals[index]["title"]])
+        await spinner.done(f"✅ Proposal #{index + 1} replaced.")
+    except ClaudeError as e:
+        await spinner.done(f"❌ Claude error: {e}")
+        return
+    if new:
+        proposals[index] = new[0]
+        import json as _json
+        services.db.update_batch(batch_id, proposals_json=_json.dumps(proposals))
+        services.db.log_audit(user_id, "proposal_replaced", batch_id, "ok",
+                              guidance[:200] or "next keyword")
+    _await_batch_feedback(services, user_id, batch_id)
+    await msg.reply_text(
+        proposals_text(proposals, batch["pillar"]),
+        reply_markup=batch_keyboard(batch_id, len(proposals)),
+        parse_mode="Markdown")
+
+
+async def _redo_proposals(update, context, batch_id, instruction: str,
+                          user_id: int):
+    """Re-propose the whole batch from free-text feedback."""
+    services = context.bot_data["services"]
+    msg = update.effective_message
+    batch = services.db.get_batch(batch_id) if batch_id else None
+    if batch is None:
+        await msg.reply_text("⚠️ This batch no longer exists.",
+                             reply_markup=blog_menu_keyboard())
+        return
+    old = batch["proposals"]
+    picks = [k for k in (_keyword_for(services, batch["pillar"], p["keyword"])
+                         for p in old) if k is not None]
+    if not picks:
+        await msg.reply_text("⚠️ Keywords no longer in the sheet.",
+                             reply_markup=blog_menu_keyboard())
+        return
+
+    status = await msg.reply_text("🔄 Rethinking the proposals …")
+    spinner = Progress(status, "🔄 Rethinking the proposals", eta_seconds=45)
+    try:
+        async with spinner:
+            new = await propose_articles(
+                services.claude, picks, batch["pillar"],
+                services.rules.as_prompt_block() if services.rules else "",
+                guidance=instruction.strip(),
+                avoid=[p["title"] for p in old])
+        await spinner.done("✅ New proposals ready.")
+    except ClaudeError as e:
+        await spinner.done(f"❌ Claude error: {e}")
+        return
+    if not new:
+        await msg.reply_text("❌ No proposals returned — please try again.")
+        return
+    import json as _json
+    services.db.update_batch(batch_id, proposals_json=_json.dumps(new))
+    services.db.log_audit(user_id, "batch_reproposed", batch_id, "ok",
+                          instruction[:200])
+
+    # Feedback on topic choice is a lasting preference, exactly like feedback on
+    # a finished article: the reviewer should not have to repeat it every week.
+    if services.rules is not None:
+        try:
+            verdict = await classify_feedback(services.claude, instruction)
+            if verdict.get("is_general_rule") and verdict.get("rule_text"):
+                rule_en = verdict.get("rule_text_en") or ""
+                services.rules.add(verdict["rule_text"], source=instruction[:120],
+                                   text_en=rule_en)
+                services.db.log_audit(user_id, "rule_added", "-", "ok",
+                                      (rule_en or verdict["rule_text"])[:200])
+                await msg.reply_text(
+                    "📌 Saved as a permanent rule for future batches:\n"
+                    f"„{md_escape(rule_en or verdict['rule_text'])}“\n\n"
+                    "Use /rules to review or remove it.",
+                    parse_mode="Markdown")
+        except ClaudeError:
+            pass
+    _await_batch_feedback(services, user_id, batch_id)
+    await msg.reply_text(
+        proposals_text(new, batch["pillar"]),
+        reply_markup=batch_keyboard(batch_id, len(new)),
+        parse_mode="Markdown")
+
+
+def _await_batch_feedback(services, user_id: int, batch_id: str):
+    """Let the reviewer answer the proposals by simply typing.
+
+    Without a step set, a typed reply reaches the router and is dropped — the
+    reviewer wrote a considered instruction and nothing happened.
+    """
+    ctx = services.db.get_session(user_id)["context"]
+    ctx["batch_id"] = batch_id
+    services.db.set_step(user_id, "blog:batchfeedback", ctx)
+
+
+def _keyword_for(services, pillar: str, keyword: str):
+    """Find a keyword row again by name, so a re-proposal keeps its volume data."""
+    for k in services.keywords.ranked(pillar, set()):
+        if k.keyword.lower() == keyword.lower():
+            return k
+    return None
 
 
 async def _start_batch(update, context, user_id: int, pillar: str = None):
@@ -686,6 +837,7 @@ async def _start_batch(update, context, user_id: int, pillar: str = None):
     batch_id = services.db.create_batch(user_id, pillar, proposals)
     services.db.log_audit(user_id, "batch_proposed", pillar, "ok",
                           f"{len(proposals)} proposals")
+    _await_batch_feedback(services, user_id, batch_id)
     await status.edit_text(proposals_text(proposals, pillar),
                            reply_markup=batch_keyboard(batch_id, len(proposals)),
                            parse_mode="Markdown")
@@ -791,6 +943,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                           reply_markup=blog_menu_keyboard())
             return
         services.db.log_audit(user_id, "batch_approved", arg, "ok", "")
+        # Approval ends the proposal conversation: a message typed later belongs
+        # to the article under review, not to a re-proposal.
+        services.db.set_step(user_id, None, {})
         await query.edit_message_text(
             f"✅ Approved — writing {len(batch['proposals'])} articles one after another.")
         await _run_next_in_batch(update, context, arg, user_id)
@@ -805,35 +960,28 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         n = int(parts[1]) - 1
         proposals = batch["proposals"]
-        # Swap in the next unused keyword that isn't already in this batch.
-        chosen = {p["keyword"].lower() for p in proposals}
-        used = services.db.used_keywords() | chosen
-        ranked = services.keywords.ranked(batch["pillar"], used)
-        if not ranked or not (0 <= n < len(proposals)):
-            await query.answer("No further keyword available", show_alert=True)
+        if not (0 <= n < len(proposals)):
+            await query.answer("No such proposal", show_alert=True)
             return
-        await query.edit_message_text("🔄 Creating replacement proposal …")
-        try:
-            new = await propose_articles(
-                services.claude, ranked[:1], batch["pillar"],
-                services.rules.as_prompt_block() if services.rules else "")
-        except ClaudeError as e:
-            await query.edit_message_text(f"❌ Claude error: {e}")
-            return
-        if new:
-            proposals[n] = new[0]
-            import json as _json
-            services.db.update_batch(parts[0],
-                                     proposals_json=_json.dumps(proposals))
+        # Ask what should change first. Regenerating blindly returned a proposal
+        # just like the last one, because nothing told the model what was wrong.
+        ctx = services.db.get_session(user_id)["context"]
+        ctx.update({"batch_id": parts[0], "swap_index": n})
+        services.db.set_step(user_id, "blog:swaphint", ctx)
         await query.edit_message_text(
-            proposals_text(proposals, batch["pillar"]),
-            reply_markup=batch_keyboard(parts[0], len(proposals)),
+            f"🔄 *Replacing #{n + 1}* — {md_escape(proposals[n]['title'])}\n\n"
+            "What should be different? Write it in your own words, for example:\n"
+            "• _more about design and choosing a motif_\n"
+            "• _do not explain the basics again_\n"
+            "• _focus on small offices_\n\n"
+            "Or send *-* to just take the next keyword.",
             parse_mode="Markdown")
         return
 
     if action == "bcancel":
         services.db.update_batch(arg, status="cancelled")
         services.db.log_audit(user_id, "batch_cancelled", arg, "ok", "")
+        services.db.set_step(user_id, None, {})
         await query.edit_message_text("❌ Batch cancelled.",
                                       reply_markup=blog_menu_keyboard())
         return

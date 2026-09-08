@@ -668,16 +668,35 @@ PROPOSALS_SCHEMA = {
 
 
 async def propose_articles(claude: "ClaudeClient", keywords: list, pillar: str,
-                           house_rules_block: str = "") -> list:
+                           house_rules_block: str = "", guidance: str = "",
+                           avoid: list = None) -> list:
     """Titles and outlines for a batch, in one call.
 
     One request for all three keeps the weekly run cheap: proposals are short, and
     a separate call per article would triple the cost of a step the operator may
     reject anyway.
+
+    `guidance` is what the reviewer asked for in their own words ("vary the
+    topics more, you don't have to explain how it works every time"); `avoid`
+    lists angles already rejected, so a retry does not return the same idea in
+    new words.
     """
     kw_lines = "\n".join(
         f"- {k.keyword} ({k.volume}/Monat, Wettbewerb {k.competition or 'unbekannt'})"
         for k in keywords)
+    guidance_block = ""
+    if guidance:
+        # The reviewer's own words outrank the generic instructions above: they
+        # are looking at the proposals this is replacing.
+        guidance_block = (
+            f"\nANWEISUNG DES REDAKTEURS — hat Vorrang vor allem oben:\n"
+            f"„{guidance}“\n")
+    avoid_block = ""
+    if avoid:
+        titles = "\n".join(f"- {t}" for t in avoid)
+        avoid_block = (
+            f"\nDiese Vorschläge wurden bereits abgelehnt. Wiederhole weder Titel\n"
+            f"noch Blickwinkel:\n{titles}\n")
     prompt = f"""Entwickle für jedes dieser Keywords einen Blogartikel-Vorschlag.
 Noch kein fertiger Text — nur Titel, Gliederung und Neben-Keywords.
 
@@ -692,9 +711,12 @@ Für jeden Vorschlag:
 - „supporting_keywords“: 5–10 thematisch passende Neben-Keywords (deutsch, wie im Sheet).
 - „value“: Ein Satz auf ENGLISCH — welchen konkreten Nutzen hat der Leser?
 
-Prüfe dich selbst: Bietet jeder Artikel echten Mehrwert für die Zielgruppe?
-Falls nicht, wähle einen anderen Blickwinkel.
-
+Vielfalt ist Pflicht: Die Vorschläge müssen sich inhaltlich deutlich
+unterscheiden. Erkläre NICHT in jedem Artikel erneut die Grundlagen („was ist
+ein Akustikbild“, „wie funktioniert Schallabsorption“). Wähle verschiedene
+Blickwinkel — etwa Design und Motivauswahl, konkrete Raumsituationen,
+Kaufentscheidung und Vergleich, Pflege und Alltag, Fehler bei der Platzierung.
+{guidance_block}{avoid_block}
 Antworte als JSON: {{"proposals": [{{"keyword": "...", "title": "...",
 "outline": ["..."], "supporting_keywords": ["..."], "value": "..."}}]}}"""
     system = _seo_system_prompt(pillar, house_rules_block, include_style=False)
