@@ -4,11 +4,14 @@ One service account covers both: the live keyword sheet (so the operator's edits
 take effect immediately) and the mockup library used for article images.
 """
 import io
+import logging
 import re
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload, MediaIoBaseDownload
+
+logger = logging.getLogger(__name__)
 
 SCOPES = [
     "https://www.googleapis.com/auth/drive",
@@ -133,6 +136,72 @@ def image_brief(focus_keyword: str, pillar: str) -> str:
     return (f"{room}, a large-format ama walls acoustic picture on the wall, "
             "natural light, calm colour palette, photorealistic, "
             "no people in frame, 16:9 landscape")
+
+
+class LivePrompt:
+    """The operator's brief, read from Drive instead of copied into the code.
+
+    The .docx was transcribed into the prompts by hand once. Everything the
+    operator added afterwards was invisible to the bot, and they had no way to
+    tell — the file looked like it was in use. Reading it live means an edit in
+    Drive reaches the next article.
+
+    Cached briefly: a batch writes three articles and must not re-download the
+    document for each pass.
+    """
+
+    CACHE_SECONDS = 300
+
+    def __init__(self, google_client: "GoogleClient", file_ids: dict):
+        self._drive = google_client._drive
+        self._file_ids = {k: v for k, v in file_ids.items() if v}
+        self._cache = {}
+
+    def _fetch(self, file_id: str) -> str:
+        meta = self._drive.files().get(fileId=file_id,
+                                       fields="mimeType").execute()
+        if meta["mimeType"] == "application/vnd.google-apps.document":
+            raw = self._drive.files().export(fileId=file_id,
+                                             mimeType="text/plain").execute()
+        else:
+            raw = self._drive.files().get_media(fileId=file_id).execute()
+            if raw[:2] == b"PK":                    # a .docx is a zip
+                raw = _docx_text(raw).encode("utf-8")
+        return raw.decode("utf-8", "replace").strip()
+
+    def text(self, name: str) -> str:
+        """The document's current text, or "" if it cannot be read.
+
+        Never raises: a Drive hiccup must not stop an article — the code's own
+        rules still apply, they are simply not topped up from the document.
+        """
+        import time
+        file_id = self._file_ids.get(name)
+        if not file_id:
+            return ""
+        hit = self._cache.get(name)
+        if hit and time.time() - hit[0] < self.CACHE_SECONDS:
+            return hit[1]
+        try:
+            text = self._fetch(file_id)
+        except Exception as e:
+            logger.warning("Live prompt %r unavailable: %s", name, e)
+            return hit[1] if hit else ""
+        self._cache[name] = (time.time(), text)
+        return text
+
+
+def _docx_text(blob: bytes) -> str:
+    """Plain text from a .docx, without pulling in a document library."""
+    import io
+    import re
+    import xml.sax.saxutils as _sax
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(blob)) as z:
+        xml = z.read("word/document.xml").decode("utf-8", "replace")
+    xml = re.sub(r"</w:p>", "\n", xml)
+    xml = re.sub(r"<[^>]+>", "", xml)
+    return _sax.unescape(xml)
 
 
 def user_credentials(client_secret_path: str, token_path: str, scopes=None):

@@ -691,7 +691,8 @@ PROPOSALS_SCHEMA = {
 
 async def propose_articles(claude: "ClaudeClient", keywords: list, pillar: str,
                            house_rules_block: str = "", guidance: str = "",
-                           avoid: list = None) -> list:
+                           avoid: list = None, published: list = None,
+                           brief: str = "") -> list:
     """Titles and outlines for a batch, in one call.
 
     One request for all three keeps the weekly run cheap: proposals are short, and
@@ -701,7 +702,9 @@ async def propose_articles(claude: "ClaudeClient", keywords: list, pillar: str,
     `guidance` is what the reviewer asked for in their own words ("vary the
     topics more, you don't have to explain how it works every time"); `avoid`
     lists angles already rejected, so a retry does not return the same idea in
-    new words.
+    new words. `published` is the blog as it stands, so the workflow's "we do not
+    want to write about the same topic too often" can actually be honoured, and
+    `brief` is the operator's own document, read live from Drive.
     """
     kw_lines = "\n".join(
         f"- {k.keyword} ({k.volume}/Monat, Wettbewerb {k.competition or 'unbekannt'})"
@@ -713,6 +716,20 @@ async def propose_articles(claude: "ClaudeClient", keywords: list, pillar: str,
         guidance_block = (
             f"\nANWEISUNG DES REDAKTEURS — hat Vorrang vor allem oben:\n"
             f"„{guidance}“\n")
+    published_block = ""
+    if published:
+        titles = "\n".join(f"- {t}" for t in published[:25])
+        published_block = (
+            f"\nDIESE ARTIKEL STEHEN BEREITS IM BLOG. Schreibe nicht erneut über\n"
+            f"dasselbe Thema — suche eine Lücke, die noch niemand füllt:\n{titles}\n"
+            f"\nFalls zu diesem Pillar-Thema kaum noch etwas Neues bleibt, sage das\n"
+            f"offen im Feld „value“ des betroffenen Vorschlags, statt eine\n"
+            f"Variation eines vorhandenen Artikels vorzuschlagen.\n")
+    brief_block = ""
+    if brief:
+        brief_block = (
+            f"\nBRIEFING DES BETREIBERS (aktueller Stand aus dem Arbeitsdokument):\n"
+            f"{brief.strip()[:4000]}\n")
     avoid_block = ""
     if avoid:
         titles = "\n".join(f"- {t}" for t in avoid)
@@ -738,7 +755,7 @@ unterscheiden. Erkläre NICHT in jedem Artikel erneut die Grundlagen („was ist
 ein Akustikbild“, „wie funktioniert Schallabsorption“). Wähle verschiedene
 Blickwinkel — etwa Design und Motivauswahl, konkrete Raumsituationen,
 Kaufentscheidung und Vergleich, Pflege und Alltag, Fehler bei der Platzierung.
-{guidance_block}{avoid_block}
+{published_block}{brief_block}{guidance_block}{avoid_block}
 Antworte als JSON: {{"proposals": [{{"keyword": "...", "title": "...",
 "outline": ["..."], "supporting_keywords": ["..."], "value": "..."}}]}}"""
     system = _seo_system_prompt(pillar, house_rules_block, include_style=False)

@@ -41,6 +41,8 @@ class Config:
     google_oauth_token_path: str
     shopify_client_id: str
     shopify_client_secret: str
+    prompt_doc_id: str
+    workflow_doc_id: str
 
     @classmethod
     def load(cls, env: Mapping = os.environ) -> "Config":
@@ -94,4 +96,6 @@ class Config:
             or "google_oauth_token.json",
             shopify_client_id=env.get("SHOPIFY_CLIENT_ID") or "",
             shopify_client_secret=env.get("SHOPIFY_CLIENT_SECRET") or "",
+            prompt_doc_id=env.get("PROMPT_DOC_ID") or "",
+            workflow_doc_id=env.get("WORKFLOW_DOC_ID") or "",
         )

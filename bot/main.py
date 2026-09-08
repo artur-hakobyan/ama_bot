@@ -226,6 +226,17 @@ def main():
                 if writer_client is not None:
                     services.docs = GoogleDocs(writer_client,
                                                cfg.drive_automation_folder_id)
+            if cfg.prompt_doc_id or cfg.workflow_doc_id:
+                # Read the brief from Drive so the operator's edits take effect
+                # without a deploy: the .docx was previously transcribed by hand
+                # and everything added afterwards was silently ignored.
+                from bot.google_drive import LivePrompt
+                services.prompts = LivePrompt(services.google, {
+                    "prompt": cfg.prompt_doc_id,
+                    "workflow": cfg.workflow_doc_id,
+                })
+                logging.getLogger(__name__).info(
+                    "Live brief enabled (Drive documents)")
         except Exception as e:
             logging.getLogger(__name__).warning("Google access unavailable: %s", e)
     services.writer = SEOWriter(

@@ -712,7 +712,9 @@ async def _swap_proposal(update, context, batch_id, index, instruction: str,
                 services.claude, picks, batch["pillar"],
                 services.rules.as_prompt_block() if services.rules else "",
                 guidance=guidance,
-                avoid=[proposals[index]["title"]])
+                avoid=[proposals[index]["title"]],
+                published=await _published_titles(services),
+                brief=_brief(services))
         await spinner.done(f"✅ Proposal #{index + 1} replaced.")
     except ClaudeError as e:
         await spinner.done(f"❌ Claude error: {e}")
@@ -756,7 +758,9 @@ async def _redo_proposals(update, context, batch_id, instruction: str,
                 services.claude, picks, batch["pillar"],
                 services.rules.as_prompt_block() if services.rules else "",
                 guidance=instruction.strip(),
-                avoid=[p["title"] for p in old])
+                avoid=[p["title"] for p in old],
+                published=await _published_titles(services),
+                brief=_brief(services))
         await spinner.done("✅ New proposals ready.")
     except ClaudeError as e:
         await spinner.done(f"❌ Claude error: {e}")
@@ -792,6 +796,31 @@ async def _redo_proposals(update, context, batch_id, instruction: str,
         proposals_text(new, batch["pillar"]),
         reply_markup=batch_keyboard(batch_id, len(new)),
         parse_mode="Markdown")
+
+
+async def _published_titles(services) -> list:
+    """Titles already on the blog, so a proposal can avoid repeating them.
+
+    The workflow asks the bot to "check existing blog post and try to find new
+    content ... we do not want to write about the same topic too often".
+    """
+    if not services.config.shopify_enabled:
+        return []
+    try:
+        _, articles = await services.shopify.list_articles(
+            services.config.blog_id, first=50)
+        return [a["title"] for a in articles if a.get("title")]
+    except ShopifyError as e:
+        logger.warning("Could not list published articles: %s", e)
+        return []
+
+
+def _brief(services) -> str:
+    """The operator's live brief from Drive, or "" when it is unavailable."""
+    if services.prompts is None:
+        return ""
+    parts = [services.prompts.text("workflow"), services.prompts.text("prompt")]
+    return "\n\n".join(p for p in parts if p)
 
 
 def _await_batch_feedback(services, user_id: int, batch_id: str):
@@ -838,7 +867,9 @@ async def _start_batch(update, context, user_id: int, pillar: str = None):
         async with spinner:
             proposals = await propose_articles(
                 services.claude, picks, pillar,
-                services.rules.as_prompt_block() if services.rules else "")
+                services.rules.as_prompt_block() if services.rules else "",
+                published=await _published_titles(services),
+                brief=_brief(services))
     except ClaudeError as e:
         await spinner.done(f"❌ Claude error: {e}")
         return

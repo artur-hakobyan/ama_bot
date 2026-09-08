@@ -14,6 +14,7 @@ class Services:
     writer: object = None        # SEOWriter — three-pass long-form pipeline
     google: object = None        # GoogleClient — Sheets + Drive
     docs: object = None          # GoogleDocs — review drafts
+    prompts: object = None       # LivePrompt — the operator's brief, read from Drive
 
     _image_cache: object = None
     _image_cache_at: float = 0.0

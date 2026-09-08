@@ -154,3 +154,53 @@ def test_retry_stays_on_the_same_article(tmp_path):
     # A failed write logs and returns without touching the index.
     assert db.get_batch(batch_id)["current_index"] == before
     db.close()
+
+
+def test_existing_articles_are_named_in_the_prompt():
+    """"We do not want to write about the same topic too often" needs the list."""
+    import asyncio
+
+    from bot import claude_client
+
+    captured = {}
+
+    class FakeClaude:
+        async def _ask(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return '{"proposals": []}'
+
+        def _parse_json(self, raw):
+            import json
+            return json.loads(raw)
+
+    asyncio.run(claude_client.propose_articles(
+        FakeClaude(), [], "Grundlagen",
+        published=["Akustikbilder im Homeoffice", "Schallschutz im Büro"],
+        brief="Check existing blog post and try to find new content to write about."))
+
+    assert "Akustikbilder im Homeoffice" in captured["prompt"]
+    assert "Schallschutz im Büro" in captured["prompt"]
+    # And the brief itself, so the operator's wording reaches the model.
+    assert "find new content" in captured["prompt"]
+
+
+def test_the_model_may_say_the_pillar_is_exhausted():
+    """Better an honest "nothing new here" than a reworded existing article."""
+    import asyncio
+
+    from bot import claude_client
+
+    captured = {}
+
+    class FakeClaude:
+        async def _ask(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return '{"proposals": []}'
+
+        def _parse_json(self, raw):
+            import json
+            return json.loads(raw)
+
+    asyncio.run(claude_client.propose_articles(
+        FakeClaude(), [], "Grundlagen", published=["Ein Artikel"]))
+    assert "offen im Feld" in captured["prompt"]
