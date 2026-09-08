@@ -23,6 +23,17 @@ fi
 echo "Pushing $BRANCH to origin…"
 git push origin "$BRANCH"
 
+# Restarting mid-article loses it: the run dies between two Claude calls and the
+# operator sees an API error that was really a deploy. Warn rather than block —
+# the check is a heuristic, and an urgent fix must still be deployable.
+if ssh "$HOST" "journalctl -u amma-bot --since '3 minutes ago' --no-pager \
+     | grep -q 'api.anthropic.com'" 2>/dev/null; then
+  echo "⚠️  The bot called Claude in the last 3 minutes — an article may be in progress."
+  echo "   Deploying now would kill it. Continue? [y/N]"
+  read -r reply
+  [ "$reply" = "y" ] || { echo "Aborted."; exit 1; }
+fi
+
 ssh "$HOST" "set -euo pipefail
   cd $DEST
   git fetch --quiet origin $BRANCH

@@ -1,6 +1,11 @@
+import asyncio
 import json
+import logging
+import random
 
 from anthropic import AsyncAnthropic
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeError(Exception):
@@ -81,6 +86,12 @@ CHECK_SCHEMA = {
 
 
 class ClaudeClient:
+    # A transient API error killed an article mid-batch. Three spaced attempts
+    # ride out a brief outage; beyond that the problem is not transient and the
+    # operator should hear about it rather than wait.
+    MAX_ATTEMPTS = 3
+    RETRY_BASE_DELAY = 3.0          # seconds; doubles each attempt, plus jitter
+
     def __init__(self, api_key: str, model: str, client=None):
         # Long articles need a generous timeout; retries cover transient
         # network drops (laptop sleep, wifi switch) rather than failing the flow.
@@ -110,7 +121,14 @@ class ClaudeClient:
         if output_config:
             kwargs["output_config"] = output_config
         last_error = None
-        for _ in range(2):
+        for attempt in range(self.MAX_ATTEMPTS):
+            if attempt:
+                # A transient 500 is usually gone within seconds, but retrying
+                # instantly hits the same bad moment: both attempts failed on a
+                # live run. Back off, with jitter so three concurrent articles
+                # do not retry in lockstep.
+                delay = self.RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                await asyncio.sleep(delay + random.uniform(0, 1))
             try:
                 create = self._client.messages.create
                 if max_tokens > 8000 and hasattr(self._client.messages, "stream"):
@@ -134,7 +152,11 @@ class ClaudeClient:
                 raise ClaudeError("Claude returned no text block")
             except Exception as e:  # anthropic transport/API errors
                 last_error = e
-        raise ClaudeError(f"Claude request failed after retry: {last_error}")
+                logger.warning("Claude call failed (attempt %d/%d): %s",
+                               attempt + 1, self.MAX_ATTEMPTS, e)
+        raise ClaudeError(
+            f"Claude is unavailable after {self.MAX_ATTEMPTS} attempts. "
+            f"This is usually temporary — please try again. ({last_error})")
 
     @staticmethod
     def _parse_json(text: str) -> dict:

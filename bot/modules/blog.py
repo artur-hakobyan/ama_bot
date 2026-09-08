@@ -504,7 +504,20 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
                 on_progress=progress)
     except ClaudeError as e:
         services.db.log_audit(user_id, "seo_draft", kw.keyword, "error", str(e))
-        await spinner.done(f"❌ Claude error: {e}")
+        await spinner.done(f"❌ \u201e{kw.keyword}\u201c failed: {e}")
+        # A failed article used to end the batch silently, abandoning the
+        # remaining ones with no way back in. Offer the two ways forward.
+        if batch_id:
+            await msg.reply_text(
+                f"The batch is paused at \u201e{md_escape(kw.keyword)}\u201c.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(
+                        "🔄 Retry this article",
+                        callback_data=f"blog:bretry:{batch_id}")],
+                    [InlineKeyboardButton(
+                        "⏭ Skip to the next one",
+                        callback_data=f"blog:bskip:{batch_id}")],
+                ]))
         return
     await spinner.done(f"✅ \u201e{kw.keyword}\u201c written.")
 
@@ -948,6 +961,27 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         services.db.set_step(user_id, None, {})
         await query.edit_message_text(
             f"✅ Approved — writing {len(batch['proposals'])} articles one after another.")
+        await _run_next_in_batch(update, context, arg, user_id)
+        return
+
+    if action in ("bretry", "bskip"):
+        batch = services.db.get_batch(arg)
+        if batch is None:
+            await query.edit_message_text("⚠️ This batch no longer exists.",
+                                          reply_markup=blog_menu_keyboard())
+            return
+        if action == "bskip":
+            # current_index still points at the failed article, so stepping past
+            # it is what "skip" means.
+            services.db.update_batch(arg,
+                                     current_index=batch["current_index"] + 1)
+            services.db.log_audit(user_id, "batch_skip", arg, "ok",
+                                  f"index {batch['current_index']}")
+            await query.edit_message_text("⏭ Skipped.")
+        else:
+            services.db.log_audit(user_id, "batch_retry", arg, "ok",
+                                  f"index {batch['current_index']}")
+            await query.edit_message_text("🔄 Retrying …")
         await _run_next_in_batch(update, context, arg, user_id)
         return
 

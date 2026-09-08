@@ -129,3 +129,28 @@ def test_approval_clears_the_feedback_step(tmp_path):
     db.set_step(7, None, {})            # what bstart does
     assert db.get_session(7)["step"] is None
     db.close()
+
+
+def test_skip_advances_past_the_failed_article(tmp_path):
+    """A failed article ended the batch silently, abandoning the rest."""
+    from bot.db import Database
+
+    db = Database(str(tmp_path / "t.db"))
+    batch_id = db.create_batch(7, "Grundlagen",
+                               [{"keyword": "a"}, {"keyword": "b"}, {"keyword": "c"}])
+    assert db.get_batch(batch_id)["current_index"] == 0
+    db.update_batch(batch_id, current_index=1)      # what "skip" does
+    assert db.get_batch(batch_id)["current_index"] == 1
+    db.close()
+
+
+def test_retry_stays_on_the_same_article(tmp_path):
+    """current_index is not advanced on failure, so a retry resumes it."""
+    from bot.db import Database
+
+    db = Database(str(tmp_path / "t.db"))
+    batch_id = db.create_batch(7, "Grundlagen", [{"keyword": "a"}, {"keyword": "b"}])
+    before = db.get_batch(batch_id)["current_index"]
+    # A failed write logs and returns without touching the index.
+    assert db.get_batch(batch_id)["current_index"] == before
+    db.close()

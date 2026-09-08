@@ -5,6 +5,14 @@ import pytest
 from bot.claude_client import ClaudeClient, ClaudeError
 
 
+def _text_response(text: str):
+    """A response object shaped like the API's, for use in a side_effect list."""
+    return SimpleNamespace(content=[
+        SimpleNamespace(type="thinking", thinking=""),
+        SimpleNamespace(type="text", text=text),
+    ])
+
+
 def fake_anthropic(text=None, side_effect=None):
     # Real responses may lead with a thinking block, so blocks carry a type.
     resp = SimpleNamespace(content=[
@@ -29,12 +37,34 @@ async def test_draft_article_bad_json_raises():
         await c.draft_article("t", "d", "-")
 
 
-async def test_retry_once_then_raise():
+async def test_retries_then_raises(monkeypatch):
+    monkeypatch.setattr(ClaudeClient, "RETRY_BASE_DELAY", 0.0)
     fake, create = fake_anthropic(side_effect=RuntimeError("boom"))
     c = ClaudeClient("k", "m", client=fake)
     with pytest.raises(ClaudeError, match="boom"):
         await c.alt_text("bild")
+    assert create.await_count == ClaudeClient.MAX_ATTEMPTS
+
+
+async def test_a_transient_failure_is_survived(monkeypatch):
+    """One 500 killed a whole article mid-batch; the next attempt succeeds."""
+    monkeypatch.setattr(ClaudeClient, "RETRY_BASE_DELAY", 0.0)
+    fake, create = fake_anthropic(side_effect=[
+        RuntimeError("Internal server error"),
+        _text_response("ein Bild"),
+    ])
+    c = ClaudeClient("k", "m", client=fake)
+    assert await c.alt_text("bild") == "ein Bild"
     assert create.await_count == 2
+
+
+async def test_the_error_says_it_is_temporary(monkeypatch):
+    """The operator sees this message; it should say what to do about it."""
+    monkeypatch.setattr(ClaudeClient, "RETRY_BASE_DELAY", 0.0)
+    fake, _ = fake_anthropic(side_effect=RuntimeError("Internal server error"))
+    c = ClaudeClient("k", "m", client=fake)
+    with pytest.raises(ClaudeError, match="temporary"):
+        await c.alt_text("bild")
 
 
 async def test_draft_article_missing_keys_raises():
