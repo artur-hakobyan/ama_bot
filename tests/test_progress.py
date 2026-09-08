@@ -3,7 +3,8 @@ import asyncio
 
 import pytest
 
-from bot.modules.blog import Progress, SPINNER_FRAMES
+from bot.modules.blog import (Progress, SPINNER_EMOJI_ID, SPINNER_FRAMES,
+                              eta_line)
 
 
 class FakeMessage:
@@ -24,10 +25,14 @@ async def test_spinner_animates_while_the_step_runs(monkeypatch):
     async with Progress(msg, "✍️ Writing"):
         await asyncio.sleep(0.06)
     assert len(msg.texts) >= 3, "spinner never advanced"
-    frames = {t[-1] for t in msg.texts}
+    frames = {t.strip()[-1] for t in msg.texts}
     assert len(frames) >= 3, "the same frame was repeated"
     assert all(f in SPINNER_FRAMES for f in frames)
-    assert all(t.startswith("✍️ Writing") for t in msg.texts)
+    assert all("✍️ Writing" in t for t in msg.texts)
+    # The animated emoji must be present, with a plain glyph inside it so the
+    # line still reads for anyone whose client drops the entity.
+    assert all(SPINNER_EMOJI_ID in t for t in msg.texts)
+    assert all("⏳</tg-emoji>" in t for t in msg.texts)
 
 
 @pytest.mark.asyncio
@@ -38,7 +43,7 @@ async def test_label_changes_without_stopping_the_spin(monkeypatch):
         await p.set_label("editor pass")
         await asyncio.sleep(0.04)
     assert any("editor pass" in t for t in msg.texts)
-    assert msg.texts[-1].startswith("✍️ Writing — editor pass")
+    assert "✍️ Writing — editor pass" in msg.texts[-1]
 
 
 @pytest.mark.asyncio
@@ -88,3 +93,38 @@ async def test_an_exception_inside_the_block_stops_the_spinner(monkeypatch):
     count = len(msg.texts)
     await asyncio.sleep(0.05)
     assert len(msg.texts) == count
+
+
+@pytest.mark.asyncio
+async def test_the_eta_is_shown_while_waiting(monkeypatch):
+    """A long wait needs a stated duration, or it reads as a hang."""
+    monkeypatch.setattr("bot.modules.blog.SPINNER_INTERVAL", 0.01)
+    msg = FakeMessage()
+    async with Progress(msg, "✍️ Writing", eta_seconds=210):
+        await asyncio.sleep(0.02)
+    assert all("about 4 minutes" in t for t in msg.texts)
+
+
+@pytest.mark.asyncio
+async def test_no_eta_line_when_none_is_given(monkeypatch):
+    monkeypatch.setattr("bot.modules.blog.SPINNER_INTERVAL", 0.01)
+    msg = FakeMessage()
+    async with Progress(msg, "✍️ Writing"):
+        await asyncio.sleep(0.02)
+    assert all("Takes" not in t for t in msg.texts)
+
+
+def test_eta_line_reads_naturally():
+    assert eta_line(45) == "about 1 minute"
+    assert eta_line(210) == "about 4 minutes"
+    assert eta_line(120) == "about 2 minutes"
+
+
+@pytest.mark.asyncio
+async def test_a_label_with_html_characters_cannot_break_the_message(monkeypatch):
+    """Labels reach parse_mode=HTML, so an unescaped < would drop the message."""
+    monkeypatch.setattr("bot.modules.blog.SPINNER_INTERVAL", 0.01)
+    msg = FakeMessage()
+    async with Progress(msg, "✍️ Writing") as p:
+        await p.set_label("<b>keyword</b> & links")
+    assert any("&lt;b&gt;keyword&lt;/b&gt; &amp; links" in t for t in msg.texts)

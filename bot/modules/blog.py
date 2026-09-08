@@ -27,23 +27,41 @@ DESIGNS = {
 
 # --- waiting animation ------------------------------------------------------
 
-# Writing an article takes a minute or two. Braille spinner frames animate inside
-# the status line so the operator can see the run is alive, not stalled.
+# Telegram's own animated hourglass. The bot may send custom emoji, verified
+# against the live API; the plain ⏳ inside the tag is what non-Premium viewers
+# and any client that rejects the entity fall back to, so the line always reads.
+SPINNER_EMOJI_ID = "5445284980978621387"
+SPINNER_FALLBACK = "⏳"
+# Braille frames still carry the motion for that fallback case.
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_INTERVAL = 1.2      # Telegram rate-limits edits; ~1s is the safe floor.
+
+
+def spinner_icon() -> str:
+    return (f'<tg-emoji emoji-id="{SPINNER_EMOJI_ID}">'
+            f"{SPINNER_FALLBACK}</tg-emoji>")
+
+
+def eta_line(seconds: int) -> str:
+    """How long this step usually takes, so waiting feels finite."""
+    minutes = max(1, round(seconds / 60))
+    return f"about {minutes} minute{'s' if minutes != 1 else ''}"
 
 
 class Progress:
     """A status message that spins while a long step runs.
 
-    Telegram has no typing indicator inside a message, so the frame is part of
-    the text itself. `set_label` swaps the stage without restarting the spin, and
-    every edit is best-effort: a cosmetic failure must never abort the article.
+    Telegram has no typing indicator inside a message, so the animation is part
+    of the text itself: an animated custom emoji, with a braille frame beside it
+    for clients that render only the fallback glyph. `set_label` swaps the stage
+    without restarting the spin, and every edit is best-effort — a cosmetic
+    failure must never abort an article that took minutes to write.
     """
 
-    def __init__(self, message, prefix: str = ""):
+    def __init__(self, message, prefix: str = "", eta_seconds: int = 0):
         self._message = message
         self._prefix = prefix
+        self._eta = eta_seconds
         self._label = ""
         self._frame = 0
         self._task = None
@@ -51,8 +69,11 @@ class Progress:
 
     def _text(self) -> str:
         spin = SPINNER_FRAMES[self._frame % len(SPINNER_FRAMES)]
-        parts = [p for p in (self._prefix, self._label) if p]
-        return f"{' — '.join(parts)} {spin}" if parts else spin
+        head = " — ".join(p for p in (self._prefix, self._label) if p)
+        line = f"{spinner_icon()} {html_lib.escape(head)} {spin}"
+        if self._eta:
+            line += f"\n<i>Takes {eta_line(self._eta)} — no need to wait here.</i>"
+        return line
 
     async def _tick(self):
         try:
@@ -68,7 +89,7 @@ class Progress:
         if text == self._last:
             return
         try:
-            await self._message.edit_text(text)
+            await self._message.edit_text(text, parse_mode="HTML")
             self._last = text
         except Exception:
             pass        # rate limits and "message is not modified" are harmless
@@ -95,6 +116,7 @@ class Progress:
         """Replace the spinner with a final, static line."""
         try:
             await self._message.edit_text(text)
+            self._last = text
         except Exception:
             pass
 
@@ -289,7 +311,7 @@ async def _create_and_preview(update, context, answers: dict, user_id: int):
         return
     design = answers.get("design", "kein bestimmtes Design")
     status = await msg.reply_text("✍️ Claude is writing the draft …")
-    spinner = Progress(status, "✍️ Writing the draft")
+    spinner = Progress(status, "✍️ Writing the draft", eta_seconds=120)
     try:
         async with spinner:
             draft_data = await services.claude.draft_article(
@@ -360,7 +382,7 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
                 reply_markup=blog_menu_keyboard())
             return
         status = await update.effective_message.reply_text("✍️ Claude is revising …")
-        spinner = Progress(status, "✍️ Revising")
+        spinner = Progress(status, "✍️ Revising", eta_seconds=60)
         gid = draft.get("shopify_article_gid")
         try:
             async with spinner:
@@ -421,7 +443,7 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
         gid = ctx.get("article_gid")
         services.db.set_step(user_id, None, ctx)
         status = await update.effective_message.reply_text("✍️ Claude is revising …")
-        spinner = Progress(status, "✍️ Revising")
+        spinner = Progress(status, "✍️ Revising", eta_seconds=60)
         try:
             async with spinner:
                 article = await services.shopify.get_article(gid)
@@ -446,7 +468,7 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
     services = context.bot_data["services"]
     msg = update.effective_message
     status = await msg.reply_text(f"✍️ Writing \u201e{kw.keyword}\u201c …")
-    spinner = Progress(status, f"✍️ \u201e{kw.keyword}\u201c")
+    spinner = Progress(status, f"✍️ \u201e{kw.keyword}\u201c", eta_seconds=210)
 
     if proposal and proposal.get("supporting_keywords"):
         supporting = proposal["supporting_keywords"][:8]
@@ -646,7 +668,8 @@ async def _start_batch(update, context, user_id: int, pillar: str = None):
     picks = ranked[:BATCH_SIZE]
     status = await msg.reply_text(
         f"📋 Creating {len(picks)} proposals for \u201e{pillar}\u201c …")
-    spinner = Progress(status, f"📋 Creating {len(picks)} proposals")
+    spinner = Progress(status, f"📋 Creating {len(picks)} proposals",
+                       eta_seconds=45)
     try:
         async with spinner:
             proposals = await propose_articles(

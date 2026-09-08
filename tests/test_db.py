@@ -1,4 +1,7 @@
+import sqlite3
+
 import pytest
+
 from bot.db import Database
 
 @pytest.fixture
@@ -83,3 +86,82 @@ def test_update_batch_rejects_unknown_column(db):
     import pytest
     with pytest.raises(ValueError):
         db.update_batch(bid, evil="x")
+
+
+# --- schema migration -------------------------------------------------------
+
+def test_a_database_missing_newer_columns_is_migrated(tmp_path):
+    """A live run lost its Google Doc link to "no such column: doc_url".
+
+    The deployed database was created before doc_url and doc_file_id existed,
+    and CREATE TABLE IF NOT EXISTS left it untouched.
+    """
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE drafts (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          shopify_article_gid TEXT,
+          title_a TEXT,
+          title_b TEXT,
+          chosen_title TEXT NOT NULL DEFAULT 'a',
+          body_html TEXT,
+          summary TEXT,
+          tags_json TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+    db = Database(str(path))
+    cols = {r["name"] for r in db._conn.execute("PRAGMA table_info(drafts)")}
+    assert "doc_url" in cols
+    assert "doc_file_id" in cols
+
+    # And the migrated database must actually accept a write to them.
+    draft_id = db.create_draft(1, "A", "B", "<p>x</p>", "sum", ["t"])
+    db.update_draft(draft_id, doc_url="https://docs.google.com/d/x",
+                    doc_file_id="fileid")
+    assert db.get_draft(draft_id)["doc_url"] == "https://docs.google.com/d/x"
+    db.close()
+
+
+def test_migrating_twice_is_harmless(tmp_path):
+    path = tmp_path / "x.db"
+    Database(str(path)).close()
+    db = Database(str(path))          # every restart runs _migrate again
+    cols = {r["name"] for r in db._conn.execute("PRAGMA table_info(drafts)")}
+    assert "doc_url" in cols
+    db.close()
+
+
+def test_existing_rows_survive_the_migration(tmp_path):
+    path = tmp_path / "keep.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE drafts (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          shopify_article_gid TEXT,
+          title_a TEXT,
+          title_b TEXT,
+          chosen_title TEXT NOT NULL DEFAULT 'a',
+          body_html TEXT,
+          summary TEXT,
+          tags_json TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+    """)
+    conn.execute("INSERT INTO drafts (id, user_id, title_a) VALUES ('keep', 7, 'Old')")
+    conn.commit()
+    conn.close()
+
+    db = Database(str(path))
+    row = db.get_draft("keep")
+    assert row["title_a"] == "Old"
+    assert row["doc_url"] is None
+    db.close()

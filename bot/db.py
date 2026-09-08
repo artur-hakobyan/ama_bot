@@ -1,4 +1,5 @@
 import json
+import re
 import secrets
 import sqlite3
 
@@ -66,19 +67,56 @@ class Database:
         self._conn.commit()
 
     def _migrate(self):
-        """Add columns to a database created by an earlier version.
+        """Bring an older database up to the current schema.
 
-        CREATE TABLE IF NOT EXISTS leaves an existing table untouched, so new
-        columns have to be added explicitly or a deployed database keeps the old
-        shape and every write to the new column fails.
+        CREATE TABLE IF NOT EXISTS leaves an existing table untouched, so a
+        deployed database keeps whatever shape it was created with and every
+        write to a newer column fails at runtime. This reads the columns the
+        schema declares and adds the ones the file is missing, so a column added
+        to SCHEMA can never be forgotten here — the earlier hand-listed version
+        missed doc_url and lost a Google Doc link on a live run.
+
+        Only additive changes are handled; SQLite cannot drop or retype a column
+        without rebuilding the table, and nothing here needs that.
         """
-        for table, column, ddl in (
-                ("drafts", "doc_file_id", "TEXT"),):
+        for table, columns in self._schema_columns().items():
             existing = {r["name"] for r in
                         self._conn.execute(f"PRAGMA table_info({table})")}
-            if column not in existing:
-                self._conn.execute(
-                    f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            if not existing:
+                continue            # table did not exist; executescript made it
+            for name, ddl in columns.items():
+                if name not in existing:
+                    self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+    @staticmethod
+    def _schema_columns() -> dict:
+        """Parse SCHEMA into {table: {column: type}}.
+
+        Columns carrying a non-constant default are skipped: SQLite refuses to
+        ALTER those in, and every one of them is already present in any database
+        old enough to need migrating.
+        """
+        tables = {}
+        for block in re.finditer(
+                r"CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\);",
+                SCHEMA, re.S):
+            name, body = block.group(1), block.group(2)
+            cols = {}
+            for line in body.strip().splitlines():
+                line = line.strip().rstrip(",")
+                if not line or line.upper().startswith(("PRIMARY KEY", "FOREIGN",
+                                                        "UNIQUE", "CHECK")):
+                    continue
+                parts = line.split(None, 1)
+                if len(parts) < 2:
+                    continue
+                col, ddl = parts[0], parts[1]
+                if "PRIMARY KEY" in ddl.upper() or "(" in ddl:
+                    continue        # rowid aliases and expression defaults
+                cols[col] = ddl
+            tables[name] = cols
+        return tables
 
     def close(self):
         self._conn.close()

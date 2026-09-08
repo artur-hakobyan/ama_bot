@@ -109,6 +109,37 @@ def plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
+# An inflected adjective before a noun makes an ordinary German phrase. Endings
+# alone cannot decide it — "Absorber" and "Bilder" also end in -er/-e — so the
+# stems of the adjectives that actually occur in this domain are listed.
+ADJECTIVE_STEMS = (
+    "akustisch", "schallschluckend", "schalldämmend", "schallabsorbierend",
+    "schallschluckend", "leise", "ruhig", "gross", "groß", "klein", "modern",
+    "individuell", "hochwertig", "textil", "dekorativ", "unsichtbar",
+    "grossformatig", "großformatig", "wirksam", "effektiv", "günstig",
+)
+
+# A verb as the second word is a phrase too: "raumakustik verbessern".
+VERB_ENDINGS = ("en", "ern", "eln")
+
+
+def is_noun_stack(keyword: str) -> bool:
+    """True for Google Ads noun stacks ("absorber büro"), false for real phrases.
+
+    "akustische bilder" is grammatical German and must be left alone; "absorber
+    büro" is two bare nouns and reads as broken when pasted into prose. Getting
+    this wrong is costly in both directions: a missed stack ships broken German,
+    and a false positive tells the writer to replace correct German with
+    nonsense ("Akustische im Bilder").
+    """
+    words = keyword.lower().split()
+    if len(words) < 2:
+        return False
+    if any(words[0].startswith(stem) for stem in ADJECTIVE_STEMS):
+        return False
+    return True
+
+
 def check(html: str, focus_keyword: str = "", summary: str = "") -> list:
     """Return a list of human-readable findings; empty means the article passes."""
     findings = []
@@ -166,11 +197,13 @@ def check(html: str, focus_keyword: str = "", summary: str = "") -> list:
             "Impersonal „man“ used — address the reader directly with „du“.")
 
     if focus_keyword:
-        # Google Ads keywords are ungrammatical noun stacks ("absorber büro").
-        # Pasted verbatim into prose they read as broken German — the reviewer
-        # flagged eight instances. Catch the stacked/hyphenated forms.
         kw_words = focus_keyword.split()
-        if len(kw_words) >= 2:
+        if is_noun_stack(focus_keyword):
+            # A noun-stack keyword ("absorber büro") is not German: pasted
+            # verbatim into prose it reads as broken, and the reviewer flagged
+            # eight such instances. Only the stack needs rephrasing — an
+            # adjective phrase like "akustische bilder" is already correct, and
+            # demanding "Akustische im Bilder" would make the text worse.
             stacked = re.escape(" ".join(kw_words))
             awkward = re.findall(rf"\b{stacked}[- ][A-Za-zÄÖÜäöü]+", text, re.I)
             if awkward:

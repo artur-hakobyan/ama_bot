@@ -247,8 +247,9 @@ zwei Überschriften.
 - Lange Aufzählungen als Liste formatieren.
 - Schließe mit einem Fazit, das die Kernaussagen zusammenfasst und eine klare \
 Handlungsaufforderung enthält.
-- Länge: 1200–1600 Wörter. Schreibe dicht und ohne Füllmaterial —
-  lieber ein kürzerer starker Text als ein aufgeblähter.
+- Länge: 1200–1600 Wörter — das ist eine harte Untergrenze, kein Richtwert.
+  Schreibe dicht und ohne Füllmaterial, aber decke das Thema so vollständig ab,
+  dass die 1200 Wörter mit Substanz gefüllt sind. Zu kurz heißt: ein Aspekt fehlt.
 
 ABSOLUTE VERBOTE — kein einziges Mal im Text:
 „man“ (duze stattdessen den Leser), alle Modalverben („kann“, „kannst“, „können“,
@@ -420,7 +421,8 @@ Worauf es in diesem ersten Schritt ankommt:
   Gefühl bekommen: „Mir wurde eine Lösung versprochen, verkauft wird mir ein Produkt.“
 - Abwechslung im Wortschatz: Wiederhole Signalwörter („selbst“, „gerade“, „besonders“)
   nicht in aufeinanderfolgenden Absätzen. Variiere bewusst.
-- Länge: 1200–1600 Wörter.
+- Länge: mindestens 1200, höchstens 1600 Wörter. Unter 1200 Wörtern ist der
+  Artikel unbrauchbar — plane genug Abschnitte ein, um diese Länge zu füllen.
 - Struktur: Einleitung, mehrere Abschnitte mit Zwischenüberschriften, Fazit mit
   Handlungsaufforderung.
 
@@ -535,7 +537,8 @@ Meta: {draft.get('summary')}
 
 Wichtig bei der Überarbeitung:
 - Die Meta-Beschreibung („summary“) bleibt zwischen 120 und 156 Zeichen.
-- Der Artikel bleibt zwischen 1200 und 1600 Wörtern.
+- Der Artikel bleibt zwischen 1200 und 1600 Wörtern. Kürze NIE unter 1200 Wörter:
+  Wenn eine Korrektur Text entfernt, gleiche das an anderer Stelle inhaltlich aus.
 
 Antworte als JSON mit denselben Keys wie zuvor (title_a, title_b, outline, body_html, \
 summary, tags, uncertain_facts)."""
@@ -553,33 +556,40 @@ summary, tags, uncertain_facts)."""
         from bot import style_check
 
         if on_progress:
-            await on_progress("Schreibe den Artikel …", [])
+            await on_progress("writing the article", [])
         draft = await self.draft(focus_keyword, pillar, supporting, must_include,
                                  internal_links)
 
-        for attempt in range(self.MAX_REVISIONS):
-            findings = style_check.check(draft.get("body_html", ""), "",
-                                         draft.get("summary", ""))
-            if not findings:
-                break
+        # One style pass here, not two. The keyword and editor passes below
+        # rewrite prose anyway and reintroduce their own issues, so a second
+        # pre-pass corrected text that was about to change — a whole Claude call
+        # (~40s) spent on work the final correction redoes properly.
+        findings = style_check.check(draft.get("body_html", ""), "",
+                                     draft.get("summary", ""))
+        if findings:
             if on_progress:
-                await on_progress(f"Stil-Korrektur {attempt + 1}", findings)
+                await on_progress("style pass", findings)
             draft = await self.revise(draft, findings, pillar, focus_keyword)
 
         if on_progress:
-            await on_progress("Keywords und Links einarbeiten …", [])
+            await on_progress("weaving in keywords and links", [])
         draft = await self.apply_keywords(draft, focus_keyword, supporting, pillar,
                                           internal_links)
 
         if on_progress:
-            await on_progress("Redaktionelle Überarbeitung …", [])
+            await on_progress("editorial pass", [])
         draft = await self.editor_pass(draft, pillar)
 
+        # The final correction is the one that matters: it sees the article as
+        # the reviewer will. Give it up to MAX_REVISIONS attempts, stopping as
+        # soon as the article is clean so a good draft still costs one call.
         findings = style_check.check(draft.get("body_html", ""), focus_keyword,
                                      draft.get("summary", ""))
-        if findings:
+        for attempt in range(self.MAX_REVISIONS):
+            if not findings:
+                break
             if on_progress:
-                await on_progress("Letzte Korrektur", findings)
+                await on_progress("final corrections", findings)
             draft = await self.revise(draft, findings, pillar, focus_keyword)
             findings = style_check.check(draft.get("body_html", ""), focus_keyword,
                                          draft.get("summary", ""))
