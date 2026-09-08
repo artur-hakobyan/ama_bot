@@ -8,7 +8,7 @@ import re
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaInMemoryUpload, MediaIoBaseDownload
 
 SCOPES = [
     "https://www.googleapis.com/auth/drive",
@@ -133,3 +133,60 @@ def image_brief(focus_keyword: str, pillar: str) -> str:
     return (f"{room}, an der Wand ein großformatiges Akustikbild von ama walls, "
             "natürliches Licht, ruhige Farbpalette, fotorealistisch, "
             "keine Menschen im Bild, Querformat 16:9")
+
+
+class DriveQuotaError(RuntimeError):
+    """Service accounts own no storage, so they cannot create files in a personal
+    My Drive folder — only in a Shared Drive. Raised so callers can degrade
+    gracefully instead of failing the article."""
+
+
+def doc_name(number: int, title: str, when=None) -> str:
+    """Naming convention from the reviewer: YY_MM_DD_Blog Number_Blog Title."""
+    import datetime
+    when = when or datetime.date.today()
+    safe = title.replace("/", "-").strip()
+    return f"{when:%y_%m_%d}_{number:02d}_{safe}"
+
+
+def _article_html(title: str, body_html: str, meta: str, focus: str,
+                  supporting: list, findings: list) -> bytes:
+    """Article plus review context, as the reviewer reads it in Google Docs."""
+    extras = ", ".join(supporting or [])
+    warn = ("<h3>Bitte prüfen</h3><ul>"
+            + "".join(f"<li>{f}</li>" for f in findings) + "</ul>") if findings else ""
+    return (f"<html><body>"
+            f"<h1>{title}</h1>"
+            f"<p><b>Focus Keyword:</b> {focus}<br>"
+            f"<b>Additional Keywords:</b> {extras}<br>"
+            f"<b>Meta-Description:</b> {meta}</p>"
+            f"<hr>{body_html}<hr>{warn}"
+            f"</body></html>").encode("utf-8")
+
+
+class GoogleDocs:
+    """Creates the review draft as a Google Doc in the automation folder."""
+
+    def __init__(self, google_client: "GoogleClient", folder_id: str):
+        self._drive = google_client._drive
+        self._folder = folder_id
+
+    def create_draft(self, number: int, title: str, body_html: str, meta: str,
+                     focus: str, supporting: list, findings: list) -> dict:
+        name = doc_name(number, title)
+        try:
+            return self._drive.files().create(
+                body={"name": name, "parents": [self._folder],
+                      "mimeType": "application/vnd.google-apps.document"},
+                media_body=MediaInMemoryUpload(
+                    _article_html(title, body_html, meta, focus, supporting,
+                                  findings),
+                    mimetype="text/html"),
+                fields="id,name,webViewLink", supportsAllDrives=True).execute()
+        except Exception as e:
+            if "storage quota" in str(e).lower():
+                raise DriveQuotaError(
+                    "The automation folder is in a personal My Drive. Service "
+                    "accounts have no storage there — convert it to a Shared "
+                    "Drive to enable Google Doc drafts.") from e
+            raise

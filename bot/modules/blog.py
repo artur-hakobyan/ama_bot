@@ -8,6 +8,7 @@ from telegram.ext import CallbackQueryHandler, ContextTypes
 from bot.auth import authorized
 from bot.claude_client import (ClaudeError, classify_feedback,
                                propose_articles)
+from bot.google_drive import DriveQuotaError
 from bot.shopify_client import ShopifyError
 
 logger = logging.getLogger(__name__)
@@ -47,13 +48,13 @@ def preview_text(draft: dict, admin_url, issues: list) -> str:
     lines = [
         f"📄 *{md_escape(chosen_title(draft))}*",
         "",
+        "📝 *Meta-Description (Excerpt):*",
         md_escape(draft["summary"] or ""),
         "",
         f"Tags: {md_escape(', '.join(draft['tags']))}" if draft["tags"] else "",
-        f"Admin: {admin_url}" if admin_url else "",
+        f"📄 Google Doc draft: {admin_url}" if admin_url else "",
         "",
-        "Status: draft (unpublished)" if admin_url
-        else "Status: local draft — Shopify not connected yet",
+        "Status: draft for review — goes to Shopify after approval",
     ]
     if issues:
         lines += ["", "⚠️ Self-check:"] + [f"• {md_escape(i)}" for i in issues]
@@ -392,27 +393,41 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
         ctx["batch_id"] = batch_id
     services.db.set_step(user_id, None, ctx)
 
-    admin_url = None
-    if services.config.shopify_enabled:
+    # The reviewable copy lives in Google Docs; Shopify only receives the article
+    # once the operator approves it (reviewer decision 2026-09-01).
+    doc_url = None
+    if services.docs:
         try:
-            article = await services.shopify.create_article(
-                services.config.blog_id, draft_data["title_a"],
-                draft_data["body_html"], draft_data["summary"],
-                draft_data["tags"], services.config.author_name)
-            services.db.update_draft(draft_id, shopify_article_gid=article["id"])
-            admin_url = services.shopify.admin_url(article["id"])
-            services.db.log_audit(user_id, "seo_draft", kw.keyword, "ok",
-                                  f"draft {draft_id}")
-        except ShopifyError as e:
-            services.db.log_audit(user_id, "seo_draft", kw.keyword, "error", str(e))
-            await msg.reply_text(f"❌ Shopify error: {e}")
+            number = services.db.next_article_number()
+            doc = services.docs.create_draft(
+                number, draft_data["title_a"], draft_data["body_html"],
+                draft_data["summary"], kw.keyword, supporting, findings)
+            doc_url = doc.get("webViewLink")
+            services.db.update_draft(draft_id, doc_url=doc_url)
+            services.db.log_audit(user_id, "doc_created", doc.get("name", ""), "ok",
+                                  doc_url or "")
+        except DriveQuotaError as e:
+            logger.warning("Google Doc draft unavailable: %s", e)
+            await msg.reply_text(
+                "ℹ️ Google Doc draft skipped — the automation folder is a personal "
+                "My Drive folder. Convert it to a Shared Drive to enable this.")
+        except Exception as e:
+            logger.warning("Google Doc draft failed: %s", e)
+    services.db.log_audit(user_id, "seo_draft", kw.keyword, "ok", f"draft {draft_id}")
+    admin_url = doc_url
 
     from bot import style_check
     words = style_check.word_count(draft_data["body_html"])
     density = style_check.keyword_density(draft_data["body_html"], kw.keyword)
     draft = services.db.get_draft(draft_id)
 
-    header = (f"🔑 {md_escape(kw.keyword)} · {words} Wörter · Dichte {density}%\n"
+    supporting_line = ""
+    if supporting:
+        supporting_line = ("\n🏷 Additional Keywords: "
+                           + md_escape(", ".join(supporting[:8])))
+    header = (f"🔑 Focus Keyword: {md_escape(kw.keyword)}"
+              f"{supporting_line}\n"
+              f"📊 Keyword-Density: {density}%  ·  📏 {words} Wörter\n"
               f"📂 {md_escape(pillar)}")
 
     # Facts the writer was unsure about: a human must verify these before publishing.
@@ -858,7 +873,8 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- draft actions: arg is the draft id ---
     draft = services.db.get_draft(arg) if arg else None
     if action in ("pub", "regen", "title", "editdraft", "discard"):
-        if draft is None or (services.config.shopify_enabled
+        needs_gid = action in ("regen", "title", "discard")
+        if draft is None or (needs_gid and services.config.shopify_enabled
                              and not draft.get("shopify_article_gid")):
             await query.edit_message_text("⚠️ This draft no longer exists.",
                                           reply_markup=blog_menu_keyboard())
@@ -866,6 +882,22 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         gid = draft.get("shopify_article_gid")
 
     if action == "pub":
+        # The article was only a Google Doc until now — create it in Shopify,
+        # then publish, so nothing reaches the store before approval.
+        if not gid and services.config.shopify_enabled:
+            try:
+                article = await services.shopify.create_article(
+                    services.config.blog_id, chosen_title(draft),
+                    draft["body_html"], draft["summary"], draft["tags"],
+                    services.config.author_name)
+                gid = article["id"]
+                services.db.update_draft(arg, shopify_article_gid=gid)
+                services.db.log_audit(user_id, "article_create", gid, "ok",
+                                      f"on approval, draft {arg}")
+            except ShopifyError as e:
+                services.db.log_audit(user_id, "article_create", "-", "error", str(e))
+                await query.edit_message_text(f"❌ Shopify error: {e}")
+                return
         if not gid:
             services.db.log_audit(user_id, "publish", "-", "skipped", "Shopify off")
             await update.effective_message.reply_text(

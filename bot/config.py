@@ -36,6 +36,7 @@ class Config:
     google_credentials_path: str
     keyword_spreadsheet_id: str
     drive_mockups_folder_id: str
+    drive_automation_folder_id: str
     shopify_client_id: str
     shopify_client_secret: str
 
@@ -85,6 +86,7 @@ class Config:
             google_credentials_path=env.get("GOOGLE_CREDENTIALS_PATH") or "",
             keyword_spreadsheet_id=env.get("KEYWORD_SPREADSHEET_ID") or "",
             drive_mockups_folder_id=env.get("DRIVE_MOCKUPS_FOLDER_ID") or "",
+            drive_automation_folder_id=env.get("DRIVE_AUTOMATION_FOLDER_ID") or "",
             shopify_client_id=env.get("SHOPIFY_CLIENT_ID") or "",
             shopify_client_secret=env.get("SHOPIFY_CLIENT_SECRET") or "",
         )

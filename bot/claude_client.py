@@ -607,13 +607,19 @@ async def classify_feedback(claude: "ClaudeClient", instruction: str) -> dict:
 
 „{instruction}“
 
-Entscheide: Ist das eine allgemeine Regel, die für ALLE künftigen Artikel gelten soll
-(z. B. „schreibe nie X“, „verwende immer den Ton Y“, „erwähne stets Z“)?
-Oder betrifft es nur diesen einen Artikel (z. B. „ergänze hier einen Absatz über DIN 4109“,
-„der dritte Abschnitt ist zu lang“)?
+Standard: Merke dir die Anweisung als dauerhafte Regel für ALLE künftigen Artikel
+(is_general_rule = true). Der Redakteur möchte Korrekturen nicht wiederholen müssen.
 
-Formuliere bei einer allgemeinen Regel „rule_text“ als knappe, überprüfbare Anweisung
-auf Deutsch, die einem Autor ohne Kontext verständlich ist.
+Setze is_general_rule NUR dann auf false, wenn die Anweisung ausdrücklich nur diesen
+einen Artikel betrifft — etwa „nur hier“, „in diesem Artikel“, „einmalig“, oder wenn
+sie sich auf eine konkrete Textstelle bezieht, die es in anderen Artikeln nicht gibt
+(z. B. „ergänze hier einen Absatz über DIN 4109“, „der dritte Absatz ist zu lang“).
+
+Auch inhaltliche Korrekturen sind dauerhafte Regeln: „wir verkaufen keine X“,
+„die Marke heißt Y“, „erwähne immer Z“ gelten für jeden weiteren Artikel.
+
+Formuliere „rule_text“ als knappe, überprüfbare Anweisung auf Deutsch, die einem Autor
+ohne Kontext verständlich ist.
 
 Antworte als JSON: {{"is_general_rule": true/false, "rule_text": "…", "reason": "kurz"}}"""
     result = claude._parse_json(await claude._ask(

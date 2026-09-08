@@ -223,7 +223,8 @@ async def test_demo_mode_skips_shopify_and_sends_article(services):
     await blog.handle_step("blog:must", u, ctx)
     services.shopify.create_article.assert_not_awaited()
     texts = [c.args[0] for c in u.effective_message.reply_text.await_args_list]
-    assert any("Shopify not connected" in t for t in texts)  # preview status line
+    # Status wording changed: drafts are reviewed before Shopify sees them.
+    assert any("goes to Shopify after approval" in t for t in texts)
     assert any("<b>" in t or "x" in t or len(t) > 100 for t in texts)  # article body sent
 
 

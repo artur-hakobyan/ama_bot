@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS drafts (
   chosen_title TEXT NOT NULL DEFAULT 'a',
   body_html TEXT,
   summary TEXT,
+  doc_url TEXT,
   tags_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -51,7 +52,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 DRAFT_COLUMNS = {
     "shopify_article_gid", "chosen_title", "status",
-    "title_a", "title_b", "body_html", "summary",
+    "title_a", "title_b", "body_html", "summary", "doc_url",
 }
 
 
@@ -145,6 +146,12 @@ class Database:
     def used_keywords(self) -> set:
         rows = self._conn.execute("SELECT keyword FROM keywords_used").fetchall()
         return {r["keyword"] for r in rows}
+
+    def next_article_number(self) -> int:
+        """Sequential blog number used in the Google Doc filename."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM drafts WHERE doc_url IS NOT NULL").fetchone()
+        return (row["n"] or 0) + 1
 
     # --- weekly batches ---
     def create_batch(self, user_id: int, pillar: str, proposals: list) -> str:

@@ -24,6 +24,20 @@ MAX_SENTENCE_WORDS = 25
 MAX_COMMAS = 2
 MAX_PARAGRAPH_WORDS = 200
 MAX_KEYWORD_DENSITY = 4.0
+MAX_WORD_LETTERS = 15          # prompt: avoid words longer than ~15 letters
+MAX_HEADING_FORMATS = 3        # prompt: one H1 plus at most three heading formats
+MAX_BLOCKS_BETWEEN_HEADINGS = 5
+MIN_INTERNAL_LINKS = 1
+
+# "wird/werden/wurde + participle" is the passive the prompt bans.
+PASSIVE_RE = re.compile(r"\b(wird|werden|wurde|wurden)\b\s+(?:\w+\s+){0,3}?"
+                        r"\b(ge\w+t|ge\w+en)\b", re.I)
+# "hat/ist ... ge-" is the perfect tense the prompt bans in favour of present.
+PERFEKT_RE = re.compile(r"\b(hat|habe|haben|ist|sind|bin)\b\s+(?:\w+\s+){0,3}?"
+                        r"\b(ge\w+t|ge\w+en)\b", re.I)
+# Nominalisations: -ung/-heit/-keit nouns that a verb would say better.
+NOMINAL_RE = re.compile(r"\b[A-ZÄÖÜ]\w+(ung|heit|keit|nis|schaft)\b")
+NOMINAL_BUDGET = 12            # some are unavoidable German (Wohnung, Wirkung)
 
 
 def strip_html(html: str) -> str:
@@ -181,6 +195,52 @@ def check(html: str, focus_keyword: str = "", summary: str = "") -> list:
         findings.append(
             f"„{panel_claim.group(0)[:60]}…“ — ama walls verkauft keine Akustikpaneele, "
             "nur Akustikbilder und Textildrucke.")
+
+    long_words = {w.strip(".,;:!?()„“\"") for w in text.split()
+                  if len(w.strip(".,;:!?()„“\"")) > MAX_WORD_LETTERS}
+    if long_words:
+        findings.append(
+            f"{len(long_words)} Wörter über {MAX_WORD_LETTERS} Buchstaben, z. B.: "
+            f"{', '.join(sorted(long_words)[:4])}.")
+
+    passives = PASSIVE_RE.findall(prose)
+    if len(passives) > 2:
+        findings.append(
+            f"{len(passives)} Passiv-Konstruktionen — formuliere aktiv "
+            f"(z. B. „{' '.join(passives[0])}“).")
+
+    perfekt = PERFEKT_RE.findall(prose)
+    if len(perfekt) > 2:
+        findings.append(
+            f"{len(perfekt)} Perfekt-Formen — schreibe im Präsens "
+            f"(z. B. „{' '.join(perfekt[0])}“).")
+
+    nominals = NOMINAL_RE.findall(text)
+    if len(nominals) > NOMINAL_BUDGET:
+        findings.append(
+            f"{len(nominals)} Substantivierungen (-ung/-heit/-keit) — "
+            "verwende häufiger Verben.")
+
+    # Heading structure: one H1, limited formats, and enough breathing room.
+    heading_levels = set(re.findall(r"<h([1-6])[^>]*>", html or "", re.I))
+    if len(heading_levels) > MAX_HEADING_FORMATS:
+        findings.append(
+            f"{len(heading_levels)} verschiedene Überschriften-Formate "
+            f"(maximal {MAX_HEADING_FORMATS}).")
+
+    between = re.split(r"<h[1-6][^>]*>", html or "", flags=re.I)[1:]
+    crowded = [b for b in between
+               if len(re.findall(r"<(p|ul|ol)[^>]*>", b, re.I))
+               > MAX_BLOCKS_BETWEEN_HEADINGS]
+    if crowded:
+        findings.append(
+            f"{len(crowded)} Abschnitte mit mehr als {MAX_BLOCKS_BETWEEN_HEADINGS} "
+            "Absätzen/Listen zwischen zwei Überschriften.")
+
+    if (html or "").count("<a href") < MIN_INTERNAL_LINKS:
+        findings.append(
+            "Keine interne Verlinkung — verlinke einen passenden Blogbeitrag, "
+            "sofern einer inhaltlich trägt.")
 
     if "fazit" not in lowered:
         findings.append("Kein „Fazit“-Abschnitt gefunden.")

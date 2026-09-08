@@ -206,6 +206,10 @@ def main():
         try:
             from bot.google_drive import GoogleClient
             services.google = GoogleClient(cfg.google_credentials_path)
+            if cfg.drive_automation_folder_id:
+                from bot.google_drive import GoogleDocs
+                services.docs = GoogleDocs(services.google,
+                                           cfg.drive_automation_folder_id)
         except Exception as e:
             logging.getLogger(__name__).warning("Google access unavailable: %s", e)
     services.writer = SEOWriter(
