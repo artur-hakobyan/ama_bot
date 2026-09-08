@@ -207,9 +207,25 @@ def main():
             from bot.google_drive import GoogleClient
             services.google = GoogleClient(cfg.google_credentials_path)
             if cfg.drive_automation_folder_id:
-                from bot.google_drive import GoogleDocs
-                services.docs = GoogleDocs(services.google,
-                                           cfg.drive_automation_folder_id)
+                from bot.google_drive import GoogleDocs, user_credentials
+                writer_client = services.google
+                # Creating files needs a real user's storage quota: a service
+                # account has none on a personal Gmail account.
+                if cfg.google_oauth_client_path:
+                    try:
+                        writer_client = GoogleClient(
+                            "", credentials=user_credentials(
+                                cfg.google_oauth_client_path,
+                                cfg.google_oauth_token_path))
+                        logging.getLogger(__name__).info(
+                            "Google Docs drafts enabled (user credentials)")
+                    except Exception as e:
+                        logging.getLogger(__name__).warning(
+                            "OAuth unavailable, Docs drafts disabled: %s", e)
+                        writer_client = None
+                if writer_client is not None:
+                    services.docs = GoogleDocs(writer_client,
+                                               cfg.drive_automation_folder_id)
         except Exception as e:
             logging.getLogger(__name__).warning("Google access unavailable: %s", e)
     services.writer = SEOWriter(

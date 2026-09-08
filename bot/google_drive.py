@@ -27,8 +27,8 @@ OFFICE_ROOMS = ["Homeoffice", "Kanzlei", "Praxis", "Office", "Buero", "Büro"]
 
 
 class GoogleClient:
-    def __init__(self, credentials_path: str):
-        creds = service_account.Credentials.from_service_account_file(
+    def __init__(self, credentials_path: str, credentials=None):
+        creds = credentials or service_account.Credentials.from_service_account_file(
             credentials_path, scopes=SCOPES)
         self._drive = build("drive", "v3", credentials=creds, cache_discovery=False)
         self._sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
@@ -133,6 +133,40 @@ def image_brief(focus_keyword: str, pillar: str) -> str:
     return (f"{room}, an der Wand ein großformatiges Akustikbild von ama walls, "
             "natürliches Licht, ruhige Farbpalette, fotorealistisch, "
             "keine Menschen im Bild, Querformat 16:9")
+
+
+def user_credentials(client_secret_path: str, token_path: str, scopes=None):
+    """Credentials acting as a real Google user, refreshed automatically.
+
+    Service accounts own no Drive storage, so on a personal Gmail account they
+    cannot create files at all. Running as the account owner uses that person's
+    quota instead. The refresh token is obtained once in a browser and then
+    reused; only an explicit revoke or a long gap requires signing in again.
+    """
+    import json
+    import os
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    scopes = scopes or SCOPES
+    creds = None
+    if os.path.exists(token_path):
+        creds = Credentials.from_authorized_user_file(token_path, scopes)
+    if creds and creds.valid:
+        return creds
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    else:
+        flow = InstalledAppFlow.from_client_secrets_file(client_secret_path, scopes)
+        # Offline access is what makes the refresh token durable; without it the
+        # bot would need a browser again within the hour.
+        creds = flow.run_local_server(port=0, access_type="offline",
+                                      prompt="consent")
+    with open(token_path, "w") as fh:
+        fh.write(creds.to_json())
+    os.chmod(token_path, 0o600)
+    return creds
 
 
 class DriveQuotaError(RuntimeError):

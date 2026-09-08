@@ -37,6 +37,8 @@ class Config:
     keyword_spreadsheet_id: str
     drive_mockups_folder_id: str
     drive_automation_folder_id: str
+    google_oauth_client_path: str
+    google_oauth_token_path: str
     shopify_client_id: str
     shopify_client_secret: str
 
@@ -87,6 +89,9 @@ class Config:
             keyword_spreadsheet_id=env.get("KEYWORD_SPREADSHEET_ID") or "",
             drive_mockups_folder_id=env.get("DRIVE_MOCKUPS_FOLDER_ID") or "",
             drive_automation_folder_id=env.get("DRIVE_AUTOMATION_FOLDER_ID") or "",
+            google_oauth_client_path=env.get("GOOGLE_OAUTH_CLIENT_PATH") or "",
+            google_oauth_token_path=env.get("GOOGLE_OAUTH_TOKEN_PATH")
+            or "google_oauth_token.json",
             shopify_client_id=env.get("SHOPIFY_CLIENT_ID") or "",
             shopify_client_secret=env.get("SHOPIFY_CLIENT_SECRET") or "",
         )
