@@ -46,9 +46,12 @@ def md_escape(text: str) -> str:
 
 def preview_text(draft: dict, admin_url, issues: list) -> str:
     lines = [
-        f"📄 *{md_escape(chosen_title(draft))}*",
+        # Every block is labelled: the reviewer asked "what is this?" about an
+        # unlabelled excerpt sitting under an unlabelled title.
+        "📰 *Article title:*",
+        md_escape(chosen_title(draft)),
         "",
-        "📝 *Meta-Description (Excerpt):*",
+        "📝 *Meta description* (the excerpt Google and the blog index show):",
         md_escape(draft["summary"] or ""),
         "",
         f"Tags: {md_escape(', '.join(draft['tags']))}" if draft["tags"] else "",
