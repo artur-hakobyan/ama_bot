@@ -85,10 +85,10 @@ async def rules_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         removed = rules.remove(index)
         if removed:
-            services.db.log_audit(user.id, "rule_removed", "-", "ok",
-                                  removed["text"][:200])
+            shown = removed.get("text_en") or removed["text"]
+            services.db.log_audit(user.id, "rule_removed", "-", "ok", shown[:200])
             await update.effective_message.reply_text(
-                f"🗑 Removed rule {index}:\n„{removed['text']}“")
+                f"🗑 Removed rule {index}:\n„{shown}“")
         else:
             await update.effective_message.reply_text(f"No rule number {index}.")
         return
@@ -99,7 +99,7 @@ async def rules_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "No house rules yet.\n\nWhen you request a change during review, the bot "
             "decides whether it is a lasting rule and saves it here automatically.")
         return
-    lines = [f"{i}. {r['text']}  _(added {r['added']})_"
+    lines = [f"{i}. {r.get('text_en') or r['text']}  _(added {r['added']})_"
              for i, r in enumerate(entries, 1)]
     await update.effective_message.reply_text(
         "📌 *House rules applied to every article:*\n\n" + "\n\n".join(lines) +

@@ -332,7 +332,8 @@ FACT_DISCIPLINE = """Faktentreue — ohne Ausnahme:
   Millionstel der Schallenergie) — nicht „auf ein Hundertstel“.
 - Wenn du dir bei einer Angabe unsicher bist: formuliere sie allgemein statt konkret,
   oder lasse sie weg. Führe unsichere Punkte am Ende im Feld „uncertain_facts“ auf,
-  damit ein Mensch sie prüft."""
+  damit ein Mensch sie prüft. Dieses Feld liest ein englischsprachiger Redakteur:
+  schreibe die Einträge auf ENGLISCH, auch wenn der Artikel deutsch ist."""
 
 
 PRODUCT_KNOWLEDGE = """Produktwissen ama walls — halte dich immer daran:
@@ -433,7 +434,7 @@ Antworte als JSON:
  "summary": "kurze inhaltliche Zusammenfassung, 120–156 Zeichen, ohne Werbung und "
             "ohne Formulierungen wie „Der Artikel erklärt“",
  "tags": ["passende", "tags"],
- "uncertain_facts": ["Angaben, bei denen du dir nicht sicher bist — leer, wenn alles gesichert ist"]}}"""
+ "uncertain_facts": ["facts you are not certain about, IN ENGLISH — empty if everything is solid"]}}"""
         draft = self._claude._parse_json(await self._claude._ask(
             prompt, max_tokens=32000, output_schema=SEO_ARTICLE_SCHEMA,
             system=self._system(pillar, include_style=False), effort="low"))
@@ -590,9 +591,10 @@ RULE_SCHEMA = {
     "properties": {
         "is_general_rule": {"type": "boolean"},
         "rule_text": {"type": "string"},
+        "rule_text_en": {"type": "string"},
         "reason": {"type": "string"},
     },
-    "required": ["is_general_rule", "rule_text", "reason"],
+    "required": ["is_general_rule", "rule_text", "rule_text_en", "reason"],
     "additionalProperties": False,
 }
 
@@ -619,9 +621,11 @@ Auch inhaltliche Korrekturen sind dauerhafte Regeln: „wir verkaufen keine X“
 „die Marke heißt Y“, „erwähne immer Z“ gelten für jeden weiteren Artikel.
 
 Formuliere „rule_text“ als knappe, überprüfbare Anweisung auf Deutsch, die einem Autor
-ohne Kontext verständlich ist.
+ohne Kontext verständlich ist. „rule_text_en“ ist dieselbe Regel auf Englisch — der
+Redakteur bestätigt sie in Telegram auf Englisch. „reason“ ebenfalls auf Englisch.
 
-Antworte als JSON: {{"is_general_rule": true/false, "rule_text": "…", "reason": "kurz"}}"""
+Antworte als JSON: {{"is_general_rule": true/false, "rule_text": "…",
+"rule_text_en": "the same rule in English", "reason": "short, in English"}}"""
     result = claude._parse_json(await claude._ask(
         prompt, max_tokens=1024, output_schema=RULE_SCHEMA))
     return result
@@ -673,9 +677,10 @@ Keywords:
 
 Für jeden Vorschlag:
 - „title“: Der Titel enthält das Fokus-Keyword wortwörtlich. Kein Clickbait.
-- „outline“: 5–7 Abschnitte als kurze Stichpunkte.
-- „supporting_keywords“: 5–10 thematisch passende Neben-Keywords.
-- „value“: Ein Satz — welchen konkreten Nutzen hat der Leser von diesem Artikel?
+- „outline“: 5–7 Abschnitte als kurze Stichpunkte, auf ENGLISCH (die Gliederung
+  liest ein englischsprachiger Redakteur zur Freigabe, sie wird nicht veröffentlicht).
+- „supporting_keywords“: 5–10 thematisch passende Neben-Keywords (deutsch, wie im Sheet).
+- „value“: Ein Satz auf ENGLISCH — welchen konkreten Nutzen hat der Leser?
 
 Prüfe dich selbst: Bietet jeder Artikel echten Mehrwert für die Zielgruppe?
 Falls nicht, wähle einen anderen Blickwinkel.

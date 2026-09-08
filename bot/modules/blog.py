@@ -296,13 +296,19 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
             try:
                 verdict = await classify_feedback(services.claude, text)
                 if verdict.get("is_general_rule") and verdict.get("rule_text"):
-                    services.rules.add(verdict["rule_text"], source=text[:120])
+                    rule_en = verdict.get("rule_text_en") or ""
+                    services.rules.add(verdict["rule_text"], source=text[:120],
+                                       text_en=rule_en)
                     services.db.log_audit(user_id, "rule_added", "-", "ok",
-                                          verdict["rule_text"][:200])
+                                          (rule_en or verdict["rule_text"])[:200])
+                    de_line = (f"\n_DE (as the writer receives it):_ "
+                               f"„{md_escape(verdict['rule_text'])}“") if rule_en else ""
                     await update.effective_message.reply_text(
                         "📌 Saved as a permanent rule for future articles:\n"
-                        f"„{verdict['rule_text']}“\n\n"
-                        "Use /rules to review or remove it.")
+                        f"„{md_escape(rule_en or verdict['rule_text'])}“"
+                        f"{de_line}\n\n"
+                        "Use /rules to review or remove it.",
+                        parse_mode="Markdown")
             except ClaudeError:
                 pass  # a failed classification must never block the edit itself
         draft = services.db.get_draft(draft_id)
@@ -427,7 +433,7 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
                            + md_escape(", ".join(supporting[:8])))
     header = (f"🔑 Focus Keyword: {md_escape(kw.keyword)}"
               f"{supporting_line}\n"
-              f"📊 Keyword-Density: {density}%  ·  📏 {words} Wörter\n"
+              f"📊 Keyword density: {density}%  ·  📏 {words} words\n"
               f"📂 {md_escape(pillar)}")
 
     # Facts the writer was unsure about: a human must verify these before publishing.
@@ -457,7 +463,7 @@ async def _show_keyword(query, services, pillar_index: int, offset: int = 0):
         f"📂 *{md_escape(pillar)}*\n\n"
         f"Next keyword ({offset + 1}/{len(ranked)}):\n"
         f"🔑 *{md_escape(kw.keyword)}*\n"
-        f"📈 {kw.volume:,}/Monat · Wettbewerb: {kw.competition or 'unbekannt'}"
+        f"📈 {kw.volume:,}/month · Competition: {kw.competition or 'unknown'}"
         .replace(",", "."),
         reply_markup=keyword_confirm_keyboard(pillar_index), parse_mode="Markdown")
     return pillar, kw
@@ -728,16 +734,16 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Shopify's article image takes a public URL; Drive links are not
             # publicly served, so the operator attaches it in the admin for now.
             await query.edit_message_text(
-                f"🖼 Bild {parts[1] if len(parts) > 1 else ''} vorgemerkt.\n"
-                "Lade es im Shopify-Admin als Beitragsbild hoch — "
-                "der Entwurf ist dort bereits angelegt.")
+                f"🖼 Image {parts[1] if len(parts) > 1 else ''} noted.\n"
+                "Upload it as the featured image in the Shopify admin — "
+                "the draft article is already there.")
         else:
             services.db.log_audit(user_id, "image_generate_requested",
                                   draft["id"], "ok", "")
             await query.edit_message_text(
-                "🎨 Bildgenerierung ist noch nicht angeschlossen.\n"
-                "Der Vorschlag oben beschreibt das passende Motiv — "
-                "ich baue die automatische Generierung als Nächstes ein.")
+                "🎨 Image generation is not connected yet.\n"
+                "The brief above describes the right motif — automatic "
+                "generation is the next thing to be built.")
         return
 
     if action == "pillars":

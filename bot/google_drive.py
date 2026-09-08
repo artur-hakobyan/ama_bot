@@ -127,12 +127,12 @@ def suggest_images(images: list, keywords: list, limit: int = 3) -> list:
 
 def image_brief(focus_keyword: str, pillar: str) -> str:
     """What to generate when the library has nothing suitable."""
-    room = ("ein modernes Büro mit mehreren Arbeitsplätzen"
+    room = ("a modern office with several workstations"
             if "büro" in (focus_keyword + pillar).lower()
-            else "ein modern eingerichteter Wohnraum")
-    return (f"{room}, an der Wand ein großformatiges Akustikbild von ama walls, "
-            "natürliches Licht, ruhige Farbpalette, fotorealistisch, "
-            "keine Menschen im Bild, Querformat 16:9")
+            else "a modern, warmly furnished living room")
+    return (f"{room}, a large-format ama walls acoustic picture on the wall, "
+            "natural light, calm colour palette, photorealistic, "
+            "no people in frame, 16:9 landscape")
 
 
 def user_credentials(client_secret_path: str, token_path: str, scopes=None):
@@ -187,7 +187,7 @@ def _article_html(title: str, body_html: str, meta: str, focus: str,
                   supporting: list, findings: list) -> bytes:
     """Article plus review context, as the reviewer reads it in Google Docs."""
     extras = ", ".join(supporting or [])
-    warn = ("<h3>Bitte prüfen</h3><ul>"
+    warn = ("<h3>Please check / Bitte pr&uuml;fen</h3><ul>"
             + "".join(f"<li>{f}</li>" for f in findings) + "</ul>") if findings else ""
     return (f"<html><body>"
             f"<h1>{title}</h1>"

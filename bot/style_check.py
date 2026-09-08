@@ -104,6 +104,11 @@ OWN_PANEL_CLAIM = re.compile(
     re.I)
 
 
+def plural(n: int, word: str) -> str:
+    """"1 sentence" / "3 sentences" — the reviewer reads these lines as English."""
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
 def check(html: str, focus_keyword: str = "", summary: str = "") -> list:
     """Return a list of human-readable findings; empty means the article passes."""
     findings = []
@@ -113,45 +118,52 @@ def check(html: str, focus_keyword: str = "", summary: str = "") -> list:
 
     if not MIN_WORDS <= words <= MAX_WORDS:
         findings.append(
-            f"Länge: {words} Wörter (Vorgabe {MIN_WORDS}–{MAX_WORDS}).")
+            f"Length: {words} words (target {MIN_WORDS}–{MAX_WORDS}).")
 
     long_sentences = [s for s in sentences(prose) if len(s.split()) > MAX_SENTENCE_WORDS]
     if long_sentences:
         findings.append(
-            f"{len(long_sentences)} Sätze über {MAX_SENTENCE_WORDS} Wörter, z. B.: "
-            f"„{long_sentences[0][:110]}…“")
+            f"{plural(len(long_sentences), 'sentence')} longer than "
+            f"{MAX_SENTENCE_WORDS} words, e.g.: „{long_sentences[0][:110]}…“")
 
     comma_heavy = [s for s in sentences(prose) if clause_commas(s) > MAX_COMMAS]
     if comma_heavy:
         findings.append(
-            f"{len(comma_heavy)} Sätze mit mehr als {MAX_COMMAS} Kommata, z. B.: "
-            f"„{comma_heavy[0][:110]}…“")
+            f"{plural(len(comma_heavy), 'sentence')} with more than {MAX_COMMAS} commas, "
+            f"e.g.: „{comma_heavy[0][:110]}…“")
 
     long_paras = [p for p in paragraphs(html) if len(p.split()) > MAX_PARAGRAPH_WORDS]
     if long_paras:
-        findings.append(f"{len(long_paras)} Absätze über {MAX_PARAGRAPH_WORDS} Wörter.")
+        findings.append(
+            f"{plural(len(long_paras), 'paragraph')} longer than "
+            f"{MAX_PARAGRAPH_WORDS} words.")
 
     lowered = f" {text.lower()} "
     modals = [w for w in MODAL_VERBS if re.search(rf"\b{w}\b", lowered)]
     if modals:
-        findings.append(f"Modalverben gefunden: {', '.join(sorted(set(modals))[:6])}.")
+        findings.append(
+            "Modal verbs found (weaken the statement): "
+            f"{', '.join(sorted(set(modals))[:6])}.")
 
     fillers = [w for w in FILLER_WORDS if re.search(rf"\b{w}\b", lowered)]
     if fillers:
-        findings.append(f"Füllwörter gefunden: {', '.join(sorted(set(fillers)))}.")
+        findings.append(
+            f"Filler words found: {', '.join(sorted(set(fillers)))}.")
 
     conds = [w for w in CONDITIONALS if re.search(rf"\b{w}\b", lowered)]
     if conds:
-        findings.append(f"Bedingungssätze gefunden: {', '.join(sorted(set(conds)))}.")
+        findings.append(
+            f"Conditional phrasing found: {', '.join(sorted(set(conds)))}.")
 
     for word, budget in BUDGETED_WORDS.items():
         hits = len(re.findall(rf"\b{word}\b", lowered))
         if hits > budget:
             findings.append(
-                f"„{word}“ {hits}× verwendet (maximal {budget}× erlaubt).")
+                f"„{word}“ used {hits}× (budget: {budget}×).")
 
     if re.search(r"\bman\b", lowered):
-        findings.append("Unpersönliches „man“ verwendet — bitte den Leser direkt duzen.")
+        findings.append(
+            "Impersonal „man“ used — address the reader directly with „du“.")
 
     if focus_keyword:
         # Google Ads keywords are ungrammatical noun stacks ("absorber büro").
@@ -163,70 +175,71 @@ def check(html: str, focus_keyword: str = "", summary: str = "") -> list:
             awkward = re.findall(rf"\b{stacked}[- ][A-Za-zÄÖÜäöü]+", text, re.I)
             if awkward:
                 findings.append(
-                    "Keyword grammatisch falsch eingebettet: "
-                    f"„{awkward[0]}“ — verwende die natürliche Form "
-                    f"(z. B. „{kw_words[0].capitalize()} im {kw_words[-1].capitalize()}“).")
+                    "Keyword embedded ungrammatically: "
+                    f"„{awkward[0]}“ — use the natural German form instead "
+                    f"(e.g. „{kw_words[0].capitalize()} im {kw_words[-1].capitalize()}“).")
 
         density = keyword_density(html, focus_keyword)
         if density > MAX_KEYWORD_DENSITY:
             findings.append(
-                f"Keyword-Dichte {density}% über dem Limit von {MAX_KEYWORD_DENSITY}%.")
+                f"Keyword density {density}% is above the "
+                f"{MAX_KEYWORD_DENSITY}% limit.")
         # Natural inflected forms count as topic coverage: every keyword word must
         # appear, even if never as the exact Google Ads string.
         elif not all(re.search(rf"\b{re.escape(w)}", text, re.I) for w in kw_words):
             findings.append(
-                f"Thema „{focus_keyword}“ ist im Text nicht erkennbar — "
-                "verwende die natürliche Form mehrfach.")
+                f"Topic „{focus_keyword}“ is not recognisable in the text — "
+                "use its natural inflected forms several times.")
 
     headings = re.findall(r"<h([1-6])[^>]*>", html or "", re.I)
     if not headings:
-        findings.append("Keine Zwischenüberschriften gefunden.")
+        findings.append("No subheadings found.")
     if re.search(r"</h[1-6]>\s*<h[1-6]", html or "", re.I):
-        findings.append("Zwei Überschriften stehen direkt hintereinander.")
+        findings.append("Two headings follow each other with no text between.")
 
     for wrong in WRONG_BRAND_SPELLINGS:
         if wrong in text:
             findings.append(
-                f"Falsche Schreibweise „{wrong}“ — die Marke heißt immer „ama walls“.")
+                f"Wrong brand spelling „{wrong}“ — it is always „ama walls“.")
             break
 
     panel_claim = OWN_PANEL_CLAIM.search(text)
     if panel_claim:
         findings.append(
-            f"„{panel_claim.group(0)[:60]}…“ — ama walls verkauft keine Akustikpaneele, "
-            "nur Akustikbilder und Textildrucke.")
+            f"„{panel_claim.group(0)[:60]}…“ — ama walls does not sell acoustic "
+            "panels, only acoustic pictures and textile prints.")
 
     long_words = {w.strip(".,;:!?()„“\"") for w in text.split()
                   if len(w.strip(".,;:!?()„“\"")) > MAX_WORD_LETTERS}
     if long_words:
         findings.append(
-            f"{len(long_words)} Wörter über {MAX_WORD_LETTERS} Buchstaben, z. B.: "
-            f"{', '.join(sorted(long_words)[:4])}.")
+            f"{plural(len(long_words), 'word')} longer than {MAX_WORD_LETTERS} letters, "
+            f"e.g.: {', '.join(sorted(long_words)[:4])}.")
 
     passives = PASSIVE_RE.findall(prose)
     if len(passives) > 2:
         findings.append(
-            f"{len(passives)} Passiv-Konstruktionen — formuliere aktiv "
-            f"(z. B. „{' '.join(passives[0])}“).")
+            f"{len(passives)} passive constructions — rewrite in the active voice "
+            f"(e.g. „{' '.join(passives[0])}“).")
 
     perfekt = PERFEKT_RE.findall(prose)
     if len(perfekt) > 2:
         findings.append(
-            f"{len(perfekt)} Perfekt-Formen — schreibe im Präsens "
-            f"(z. B. „{' '.join(perfekt[0])}“).")
+            f"{len(perfekt)} perfect-tense forms — write in the present tense "
+            f"(e.g. „{' '.join(perfekt[0])}“).")
 
     nominals = NOMINAL_RE.findall(text)
     if len(nominals) > NOMINAL_BUDGET:
         findings.append(
-            f"{len(nominals)} Substantivierungen (-ung/-heit/-keit) — "
-            "verwende häufiger Verben.")
+            f"{len(nominals)} nominalisations (-ung/-heit/-keit) — "
+            "use verbs more often.")
 
     # Heading structure: one H1, limited formats, and enough breathing room.
     heading_levels = set(re.findall(r"<h([1-6])[^>]*>", html or "", re.I))
     if len(heading_levels) > MAX_HEADING_FORMATS:
         findings.append(
-            f"{len(heading_levels)} verschiedene Überschriften-Formate "
-            f"(maximal {MAX_HEADING_FORMATS}).")
+            f"{len(heading_levels)} different heading levels "
+            f"(maximum {MAX_HEADING_FORMATS}).")
 
     between = re.split(r"<h[1-6][^>]*>", html or "", flags=re.I)[1:]
     crowded = [b for b in between
@@ -234,16 +247,16 @@ def check(html: str, focus_keyword: str = "", summary: str = "") -> list:
                > MAX_BLOCKS_BETWEEN_HEADINGS]
     if crowded:
         findings.append(
-            f"{len(crowded)} Abschnitte mit mehr als {MAX_BLOCKS_BETWEEN_HEADINGS} "
-            "Absätzen/Listen zwischen zwei Überschriften.")
+            f"{plural(len(crowded), 'section')} with more than {MAX_BLOCKS_BETWEEN_HEADINGS} "
+            "paragraphs/lists between two headings.")
 
     if (html or "").count("<a href") < MIN_INTERNAL_LINKS:
         findings.append(
-            "Keine interne Verlinkung — verlinke einen passenden Blogbeitrag, "
-            "sofern einer inhaltlich trägt.")
+            "No internal link — link to a related blog post where one genuinely "
+            "fits the topic.")
 
     if "fazit" not in lowered:
-        findings.append("Kein „Fazit“-Abschnitt gefunden.")
+        findings.append("No „Fazit“ (conclusion) section found.")
 
     if summary:
         # The reviewer rejected "Der Artikel erklärt …" openings and ad copy in
@@ -253,16 +266,17 @@ def check(html: str, focus_keyword: str = "", summary: str = "") -> list:
                        "in diesem artikel", "der beitrag erklärt"):
             if phrase in low_sum:
                 findings.append(
-                    f"Meta-Beschreibung beginnt mit „{phrase}“ — fasse den Inhalt "
-                    "direkt zusammen, statt den Artikel zu beschreiben.")
+                    f"Meta description opens with „{phrase}“ — summarise the "
+                    "content directly instead of describing the article.")
                 break
         if "amawalls" in low_sum:
-            findings.append("Meta-Beschreibung enthält Werbung für AMAwalls — "
-                            "sie soll rein inhaltlich zusammenfassen.")
+            findings.append("Meta description advertises the brand — it should "
+                            "summarise the content only.")
         n = len(summary)
         if not 120 <= n <= 156:
-            findings.append(f"Meta-Beschreibung {n} Zeichen (Vorgabe 120–156).")
+            findings.append(
+                f"Meta description is {n} characters (target 120–156).")
         elif focus_keyword and focus_keyword.lower() not in summary.lower():
-            findings.append("Fokus-Keyword fehlt in der Meta-Beschreibung.")
+            findings.append("Focus keyword missing from the meta description.")
 
     return findings

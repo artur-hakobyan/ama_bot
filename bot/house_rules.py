@@ -28,9 +28,11 @@ class HouseRules:
     def _save(self):
         self._path.write_text(json.dumps(self._rules, ensure_ascii=False, indent=2))
 
-    def add(self, text: str, source: str = "") -> dict:
-        rule = {"text": text.strip(), "added": date.today().isoformat(),
-                "source": source[:120]}
+    def add(self, text: str, source: str = "", text_en: str = "") -> dict:
+        # `text` is the German instruction the writer receives; `text_en` is the
+        # same rule for the operators, who read the bot in English.
+        rule = {"text": text.strip(), "text_en": (text_en or "").strip(),
+                "added": date.today().isoformat(), "source": source[:120]}
         self._rules.append(rule)
         self._save()
         return rule
