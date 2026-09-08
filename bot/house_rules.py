@@ -37,6 +37,15 @@ class HouseRules:
         self._save()
         return rule
 
+    def set_image_words(self, rule: dict, words: list):
+        """Attach room words to a rule so image selection can act on it.
+
+        The rule text is for the writer; these words are for the mockup picker,
+        which matches filenames and cannot read prose.
+        """
+        rule["image_words"] = list(words)
+        self._save()
+
     def remove(self, index: int) -> dict | None:
         """1-based index, matching what /rules shows the operator."""
         if 1 <= index <= len(self._rules):

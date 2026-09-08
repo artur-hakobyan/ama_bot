@@ -99,7 +99,7 @@ def room_of(filename: str) -> str:
     return ""
 
 
-def score_image(filename: str, keywords: list) -> int:
+def score_image(filename: str, keywords: list, prefer: list = None) -> int:
     """How well a mockup fits an article, by filename alone (no vision cost)."""
     name = filename.lower()
     score = 0
@@ -110,22 +110,68 @@ def score_image(filename: str, keywords: list) -> int:
     room = room_of(filename)
     if room in OFFICE_ROOMS:
         score += 5
+    # Words the operator asked to favour outweigh a keyword match: the audience
+    # is offices, so an office shot beats a better-matching living room.
+    for word in (prefer or []):
+        if word.lower() in name:
+            score += 8
     return score
 
 
 MIN_USEFUL_SCORE = 5
 
 
-def suggest_images(images: list, keywords: list, limit: int = 3) -> list:
-    """Best mockups for an article, best first.
+def suggest_images(images: list, keywords: list, limit: int = 3,
+                   prefer: list = None) -> list:
+    """Best mockups for an article, best first, never the same image twice.
 
     Returns [] when nothing scores above the usefulness floor — the caller then
     offers to generate an image instead of attaching a poor match.
+
+    The library keeps the same mockup in several folders, so 23 of 116 names
+    appear more than once and the reviewer was offered one image three times.
+    Deduplicate by filename, and prefer variety of motif over a marginally
+    better score: three shots of one artwork are not a choice.
+
+    `prefer` are words the operator asked to favour ("büro", "homeoffice").
     """
-    scored = [(score_image(i["name"], keywords), i) for i in images]
+    seen = set()
+    scored = []
+    for i in images:
+        if i["name"] in seen:
+            continue
+        seen.add(i["name"])
+        scored.append((score_image(i["name"], keywords, prefer), i))
     good = [(s, i) for s, i in scored if s >= MIN_USEFUL_SCORE]
     good.sort(key=lambda pair: -pair[0])
-    return [dict(i, score=s) for s, i in good[:limit]]
+
+    # One image per artwork: the leading "02_01" style code identifies the
+    # motif, so a second crop of it adds nothing to the choice.
+    picked, motifs = [], set()
+    for s, i in good:
+        motif = _motif_of(i["name"])
+        if motif in motifs:
+            continue
+        motifs.add(motif)
+        picked.append(dict(i, score=s))
+        if len(picked) == limit:
+            return picked
+    # Only if variety could not fill the list, fall back to the next best.
+    for s, i in good:
+        if len(picked) == limit:
+            break
+        if not any(p["name"] == i["name"] for p in picked):
+            picked.append(dict(i, score=s))
+    return picked
+
+
+MOTIF_CODE = re.compile(r"^(\d{2}_\d{2})")
+
+
+def _motif_of(filename: str) -> str:
+    """The artwork a mockup shows: "02_01 Botanical Beauty…" -> "02_01"."""
+    m = MOTIF_CODE.match(filename)
+    return m.group(1) if m else filename.lower()
 
 
 def image_brief(focus_keyword: str, pillar: str) -> str:

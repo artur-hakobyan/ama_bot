@@ -379,6 +379,9 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
     elif step == "blog:batchfeedback":
         services.db.set_step(user_id, None, ctx)
         await _redo_proposals(update, context, ctx.get("batch_id"), text, user_id)
+    elif step == "blog:imagefeedback":
+        services.db.set_step(user_id, None, ctx)
+        await _image_feedback(update, context, ctx, text, user_id)
     elif step == "blog:editdraft":
         draft_id = ctx.get("draft_id")
         draft = services.db.get_draft(draft_id) if draft_id else None
@@ -578,7 +581,60 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
         reply_markup=preview_keyboard(draft_id), parse_mode="Markdown",
         disable_web_page_preview=True)
 
-    await _offer_images(msg, services, draft_id, kw.keyword, pillar)
+    await _offer_images(msg, services, draft_id, kw.keyword, pillar, user_id)
+
+
+# Room words that can be preferred: they are what the mockup filenames carry.
+KNOWN_ROOM_WORDS = ("büro", "buero", "homeoffice", "office", "kanzlei", "praxis",
+                    "wohnzimmer", "schlafzimmer", "esszimmer", "flur",
+                    "besprechung", "meeting")
+
+
+def extract_image_words(instruction: str) -> list:
+    """Room words the operator named, e.g. "büro" and "homeoffice".
+
+    Only words that appear in the library's filenames are useful — preferring a
+    word no mockup carries would silently do nothing.
+    """
+    low = instruction.lower()
+    return [w for w in KNOWN_ROOM_WORDS if w in low]
+
+
+async def _image_feedback(update, context, ctx: dict, instruction: str,
+                          user_id: int):
+    """Re-pick the mockups from what the operator asked for, and remember it."""
+    services = context.bot_data["services"]
+    msg = update.effective_message
+    draft_id = ctx.get("draft_id")
+    keyword = ctx.get("img_keyword") or ""
+    pillar = ctx.get("img_pillar") or ""
+
+    words = extract_image_words(instruction)
+    if words and services.rules is not None:
+        # Stored on a rule so the preference survives and applies to every later
+        # article — the reviewer should not restate it each week.
+        rule = services.rules.add(
+            f"Bildauswahl: bevorzuge Mockups mit {', '.join(words)} im Dateinamen.",
+            source=instruction[:120],
+            text_en=(f"Image choice: prefer mockups with "
+                     f"{', '.join(words)} in the filename."))
+        services.rules.set_image_words(rule, words)
+        services.db.log_audit(user_id, "image_pref_added", "-", "ok",
+                              ", ".join(words))
+        await msg.reply_text(
+            "📌 Saved for every future article:\n"
+            f"„Prefer images with {md_escape(', '.join(words))} in the title“\n\n"
+            "Use /rules to review or remove it.",
+            parse_mode="Markdown")
+    else:
+        services.db.log_audit(user_id, "image_feedback", "-", "ok",
+                              instruction[:200])
+        await msg.reply_text(
+            "📝 Noted. I can only filter mockups by words in their filename — "
+            "naming a room (büro, homeoffice, praxis …) is what takes effect.")
+
+    if draft_id:
+        await _offer_images(msg, services, draft_id, keyword, pillar, user_id)
 
 
 async def _show_keyword(query, services, pillar_index: int, offset: int = 0):
@@ -601,7 +657,25 @@ async def _show_keyword(query, services, pillar_index: int, offset: int = 0):
     return pillar, kw
 
 
-async def _offer_images(msg, services, draft_id: str, keyword: str, pillar: str):
+# Words the operator asked to favour when choosing a mockup, learned from their
+# feedback at the image step and applied to every later article.
+IMAGE_PREFS_KEY = "image_prefs"
+
+
+def _image_prefs(services) -> list:
+    """Room words the operator wants favoured, e.g. ["büro", "homeoffice"]."""
+    if services.rules is None:
+        return []
+    words = []
+    for rule in services.rules.all():
+        for word in (rule.get("image_words") or []):
+            if word not in words:
+                words.append(word)
+    return words
+
+
+async def _offer_images(msg, services, draft_id: str, keyword: str, pillar: str,
+                        user_id: int = None):
     """Show 2-3 matching mockups, or offer to generate one when none fit."""
     from bot.google_drive import image_brief, suggest_images
 
@@ -609,7 +683,8 @@ async def _offer_images(msg, services, draft_id: str, keyword: str, pillar: str)
         return
     try:
         images = services.images_cached()
-        picks = suggest_images(images, [keyword, pillar])
+        picks = suggest_images(images, [keyword, pillar],
+                               prefer=_image_prefs(services))
     except Exception as e:                      # Drive hiccup must not block review
         logger.warning("Image lookup failed: %s", e)
         return
@@ -638,8 +713,19 @@ async def _offer_images(msg, services, draft_id: str, keyword: str, pillar: str)
     await msg.reply_media_group(media)
     buttons.append([InlineKeyboardButton("🎨 Generate instead",
                                          callback_data=f"blog:genimg:{draft_id}")])
-    await msg.reply_text("🖼 Matching mockups — which one for the article?",
-                         reply_markup=InlineKeyboardMarkup(buttons))
+    # Typing here used to reach nothing. The reviewer's instinct is to say what
+    # is wrong with the selection, and that instruction should shape every later
+    # article, not just be re-picked by hand each week.
+    if user_id is not None:
+        ctx = services.db.get_session(user_id)["context"]
+        ctx["draft_id"] = draft_id
+        ctx.update({"img_keyword": keyword, "img_pillar": pillar})
+        services.db.set_step(user_id, "blog:imagefeedback", ctx)
+    await msg.reply_text(
+        "🖼 Matching mockups — which one for the article?\n\n"
+        "💬 _Or write what you want instead — e.g. „always use images with "
+        "„büro“ or „homeoffice“ in the title“._",
+        reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
 
 # --- weekly batch -------------------------------------------------------------
