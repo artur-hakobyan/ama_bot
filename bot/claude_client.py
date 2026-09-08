@@ -205,6 +205,49 @@ Artikel:
 {body_html}"""
         return (await self._ask(prompt)).strip()
 
+    async def apply_review_notes(self, body_html: str, notes: list) -> str:
+        """Rewrite the article from comments left in the Google Doc.
+
+        Each note carries the passage it sits on, so the rewrite changes that
+        passage rather than guessing. A highlight with no text is a "this is
+        wrong" mark: the passage must change, but the reviewer did not say how.
+        """
+        blocks = []
+        for n in notes:
+            quote = (n.get("quote") or "").strip()
+            note = (n.get("note") or "").strip()
+            if n.get("kind") == "highlight" and not note:
+                blocks.append(
+                    f"MARKIERTE STELLE (der Redakteur hat sie hervorgehoben, "
+                    f"aber nicht begründet — formuliere sie neu, kürze sie oder "
+                    f"streiche sie, je nachdem was inhaltlich richtig ist):\n"
+                    f"„{quote}“")
+            elif quote:
+                blocks.append(f"ZU DIESER STELLE:\n„{quote}“\nANWEISUNG: {note}")
+            else:
+                blocks.append(f"ALLGEMEINE ANWEISUNG: {note}")
+        prompt = f"""Der Redakteur hat den Artikel im Google Doc kommentiert.
+Setze JEDEN Kommentar um. Ändere nur, was die Kommentare betreffen — der übrige
+Text bleibt unverändert.
+
+{chr(10).join(f"--- {i} ---{chr(10)}{b}" for i, b in enumerate(blocks, 1))}
+
+Wenn ein Kommentar verlangt, einen Abschnitt zu streichen, streiche ihn wirklich
+und baue keinen Ersatz an derselben Stelle ein, der dasselbe anders sagt.
+Achte darauf, dass der Text danach noch flüssig zusammenhängt: passe Übergänge
+an, wenn du etwas entfernst.
+
+WICHTIG — der Kommentar markiert nur EINE Stelle, gemeint ist aber der ganze
+Artikel: Prüfe den vollständigen Text auf dieselbe Aussage an anderer Stelle und
+korrigiere sie dort ebenso. Ein Kommentar wie „dieses Material erwähnen wir
+nicht“ gilt für jede Erwähnung im Artikel, nicht nur für den zitierten Absatz.
+
+Antworte NUR mit dem vollständigen überarbeiteten HTML, ohne JSON, ohne Erklärung.
+
+Artikel:
+{body_html}"""
+        return (await self._ask(prompt, max_tokens=16000)).strip()
+
     async def self_check(self, draft: dict) -> dict:
         prompt = f"""Prüfe diesen Artikelentwurf gegen deine Richtlinien: deutsch in \
 du-Form, warm/organisch, problem-first Einstieg ohne Produkt, 4-6 <h2> (mehrere als \

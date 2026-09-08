@@ -50,8 +50,16 @@ def test_preview_text_escapes_dynamic_markdown():
 def test_preview_keyboard_actions():
     kb = blog.preview_keyboard("abc123")
     datas = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert datas == ["blog:pub:abc123", "blog:regen:abc123", "blog:title:abc123",
+    assert datas == ["blog:pub:abc123", "blog:docnotes:abc123",
+                     "blog:regen:abc123", "blog:title:abc123",
                      "blog:editdraft:abc123", "blog:discard:abc123"]
+
+
+def test_no_doc_button_without_a_document():
+    """Offering to read comments from a Doc that does not exist is a dead end."""
+    kb = blog.preview_keyboard("abc123", has_doc=False)
+    datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "blog:docnotes:abc123" not in datas
 
 
 def test_design_slug_roundtrip():

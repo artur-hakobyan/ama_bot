@@ -237,6 +237,12 @@ class LivePrompt:
         return text
 
 
+def _unescape(text: str) -> str:
+    """Drive returns HTML entities in quoted text (&#228; for ä)."""
+    import html as _html
+    return _html.unescape(text or "")
+
+
 def _docx_text(blob: bytes) -> str:
     """Plain text from a .docx, without pulling in a document library."""
     import io
@@ -367,6 +373,79 @@ class GoogleDocs:
             removeParents=",".join(current.get("parents", [])),
             fields="id,parents", supportsAllDrives=True).execute()
         return target
+
+    def update_draft(self, file_id: str, title: str, body_html: str,
+                     meta: str, findings: list) -> dict:
+        """Rewrite the document in place, keeping its id, name and comments.
+
+        The reviewer's copy must show the corrected text, or the next round is
+        reviewed against a version that no longer exists.
+        """
+        return self._drive.files().update(
+            fileId=file_id,
+            media_body=MediaInMemoryUpload(
+                _article_html(title, body_html, meta, "", [], findings),
+                mimetype="text/html"),
+            fields="id,webViewLink", supportsAllDrives=True).execute()
+
+    def review_notes(self, file_id: str) -> list:
+        """Comments and highlights the reviewer left in the document.
+
+        Reviewing in the document is more natural than retyping in Telegram: the
+        comment sits on the passage it is about. Each note carries the quoted
+        text so the rewrite knows exactly which passage to change.
+
+        Returns [{"quote": str, "note": str, "kind": "comment"|"highlight"}].
+        """
+        notes = []
+        try:
+            data = self._drive.comments().list(
+                fileId=file_id,
+                fields=("comments(content,resolved,quotedFileContent/value,"
+                        "replies(content))"),
+                pageSize=100).execute()
+        except Exception as e:
+            logger.warning("Could not read comments on %s: %s", file_id, e)
+            data = {}
+        for c in data.get("comments", []):
+            if c.get("resolved"):
+                continue            # already dealt with; re-applying would undo it
+            text = " ".join(
+                [c.get("content", "")]
+                + [r.get("content", "") for r in c.get("replies", [])]).strip()
+            if not text:
+                continue
+            quote = (c.get("quotedFileContent") or {}).get("value", "")
+            notes.append({"quote": _unescape(quote), "note": text,
+                          "kind": "comment"})
+        notes += self._highlights(file_id)
+        return notes
+
+    def _highlights(self, file_id: str) -> list:
+        """Passages the reviewer marked with a background colour.
+
+        A highlight says "this part is wrong" without saying why, so it is
+        reported as its own kind and the rewrite is told to treat it that way.
+        """
+        try:
+            html = self._drive.files().export(
+                fileId=file_id, mimeType="text/html").execute().decode("utf-8")
+        except Exception as e:
+            logger.warning("Could not export %s for highlights: %s", file_id, e)
+            return []
+        # Google emits highlights as CSS classes carrying a background colour;
+        # white is the page itself and never a mark.
+        classes = set(re.findall(
+            r"\.(c\d+)\s*\{[^}]*background-color:\s*#(?!ffffff\b)[0-9a-fA-F]{6}",
+            html))
+        found = []
+        for cls in classes:
+            for chunk in re.findall(rf'<span class="{cls}">(.*?)</span>', html,
+                                    re.S):
+                text = _unescape(re.sub(r"<[^>]+>", "", chunk)).strip()
+                if len(text) > 3:
+                    found.append({"quote": text, "note": "", "kind": "highlight"})
+        return found
 
     def create_draft(self, number: int, title: str, body_html: str, meta: str,
                      focus: str, supporting: list, findings: list) -> dict:

@@ -233,14 +233,22 @@ async def _send_article_body(msg, body_html: str):
                              disable_web_page_preview=True)
 
 
-def preview_keyboard(draft_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Publish", callback_data=f"blog:pub:{draft_id}")],
+def preview_keyboard(draft_id: str, has_doc: bool = True) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("✅ Publish",
+                                  callback_data=f"blog:pub:{draft_id}")]]
+    if has_doc:
+        # Reviewing in the document is more natural than retyping in Telegram:
+        # the comment sits on the passage it is about.
+        rows.append([InlineKeyboardButton(
+            "💬 Apply my comments from the Doc",
+            callback_data=f"blog:docnotes:{draft_id}")])
+    rows += [
         [InlineKeyboardButton("🔄 Regenerate", callback_data=f"blog:regen:{draft_id}"),
          InlineKeyboardButton("🔀 Title A/B", callback_data=f"blog:title:{draft_id}")],
         [InlineKeyboardButton("✏️ Edit", callback_data=f"blog:editdraft:{draft_id}"),
          InlineKeyboardButton("🗑 Discard", callback_data=f"blog:discard:{draft_id}")],
-    ])
+    ]
+    return InlineKeyboardMarkup(rows)
 
 
 def blog_menu_keyboard() -> InlineKeyboardMarkup:
@@ -1374,6 +1382,75 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 services.db.update_batch(batch_id,
                                          current_index=batch["current_index"] + 1)
                 await _run_next_in_batch(update, context, batch_id, user_id)
+
+    elif action == "docnotes":
+        if services.docs is None or not draft.get("doc_file_id"):
+            await query.answer("No Google Doc for this draft", show_alert=True)
+            return
+        status = await query.message.reply_text("💬 Reading your comments …")
+        spinner = Progress(status, "💬 Applying your comments", eta_seconds=60)
+        try:
+            notes = services.docs.review_notes(draft["doc_file_id"])
+        except Exception as e:
+            logger.warning("Could not read review notes: %s", e)
+            await spinner.done(f"❌ Could not read the document: {e}")
+            return
+        if not notes:
+            await spinner.done(
+                "📄 No open comments found in the Doc.\n"
+                "Comment on a passage (or highlight it) and press the button "
+                "again. Resolved comments are skipped.")
+            return
+        try:
+            async with spinner:
+                new_body = await services.claude.apply_review_notes(
+                    draft["body_html"], notes)
+            await spinner.done(f"✅ Applied {len(notes)} comment(s).")
+        except ClaudeError as e:
+            await spinner.done(f"❌ Claude error: {e}")
+            return
+        services.db.update_draft(arg, body_html=new_body)
+        services.db.log_audit(user_id, "doc_notes_applied", arg, "ok",
+                              f"{len(notes)} notes")
+        from bot import style_check
+
+        # The Doc is the reviewer's copy: leave it showing the corrected text,
+        # or the next round would be reviewed against the old version.
+        findings = style_check.check(new_body, "", draft["summary"] or "")
+        try:
+            services.docs.update_draft(draft["doc_file_id"],
+                                       chosen_title(draft), new_body,
+                                       draft["summary"] or "", findings)
+        except Exception as e:
+            logger.warning("Could not update the Doc: %s", e)
+
+        # A comment is review feedback like any other: remember what should hold
+        # for every future article, so the same note is not needed twice.
+        for note in notes:
+            text = (note.get("note") or "").strip()
+            if not text or services.rules is None:
+                continue
+            try:
+                verdict = await classify_feedback(services.claude, text)
+                if verdict.get("is_general_rule") and verdict.get("rule_text"):
+                    rule_en = verdict.get("rule_text_en") or ""
+                    services.rules.add(verdict["rule_text"], source=text[:120],
+                                       text_en=rule_en)
+                    services.db.log_audit(user_id, "rule_added", "-", "ok",
+                                          (rule_en or verdict["rule_text"])[:200])
+                    await query.message.reply_text(
+                        "📌 Saved as a permanent rule:\n"
+                        f"„{md_escape(rule_en or verdict['rule_text'])}“",
+                        parse_mode="Markdown")
+            except ClaudeError:
+                pass
+
+        draft = services.db.get_draft(arg)
+        await query.message.reply_text(
+            preview_text(draft, draft.get("doc_url"), findings),
+            reply_markup=preview_keyboard(arg), parse_mode="Markdown",
+            disable_web_page_preview=True)
+        return
 
     elif action == "regen":
         session = services.db.get_session(user_id)
