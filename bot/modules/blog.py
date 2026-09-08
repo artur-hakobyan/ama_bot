@@ -1,3 +1,4 @@
+import asyncio
 import html as html_lib
 import logging
 from html.parser import HTMLParser
@@ -22,6 +23,80 @@ DESIGNS = {
     "poppy": "Poppy Seed Explosion",
     "none": "No specific design",
 }
+
+
+# --- waiting animation ------------------------------------------------------
+
+# Writing an article takes a minute or two. Braille spinner frames animate inside
+# the status line so the operator can see the run is alive, not stalled.
+SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+SPINNER_INTERVAL = 1.2      # Telegram rate-limits edits; ~1s is the safe floor.
+
+
+class Progress:
+    """A status message that spins while a long step runs.
+
+    Telegram has no typing indicator inside a message, so the frame is part of
+    the text itself. `set_label` swaps the stage without restarting the spin, and
+    every edit is best-effort: a cosmetic failure must never abort the article.
+    """
+
+    def __init__(self, message, prefix: str = ""):
+        self._message = message
+        self._prefix = prefix
+        self._label = ""
+        self._frame = 0
+        self._task = None
+        self._last = None
+
+    def _text(self) -> str:
+        spin = SPINNER_FRAMES[self._frame % len(SPINNER_FRAMES)]
+        parts = [p for p in (self._prefix, self._label) if p]
+        return f"{' — '.join(parts)} {spin}" if parts else spin
+
+    async def _tick(self):
+        try:
+            while True:
+                await asyncio.sleep(SPINNER_INTERVAL)
+                self._frame += 1
+                await self._edit()
+        except asyncio.CancelledError:
+            raise
+
+    async def _edit(self):
+        text = self._text()
+        if text == self._last:
+            return
+        try:
+            await self._message.edit_text(text)
+            self._last = text
+        except Exception:
+            pass        # rate limits and "message is not modified" are harmless
+
+    async def set_label(self, label: str):
+        self._label = label
+        self._frame += 1
+        await self._edit()
+
+    async def __aenter__(self):
+        self._task = asyncio.create_task(self._tick())
+        return self
+
+    async def __aexit__(self, *exc):
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        return False
+
+    async def done(self, text: str):
+        """Replace the spinner with a final, static line."""
+        try:
+            await self._message.edit_text(text)
+        except Exception:
+            pass
 
 
 # --- pure helpers -----------------------------------------------------------
@@ -213,14 +288,18 @@ async def _create_and_preview(update, context, answers: dict, user_id: int):
             reply_markup=blog_menu_keyboard())
         return
     design = answers.get("design", "kein bestimmtes Design")
-    await msg.reply_text("✍️ Claude is writing the draft …")
+    status = await msg.reply_text("✍️ Claude is writing the draft …")
+    spinner = Progress(status, "✍️ Writing the draft")
     try:
-        draft_data = await services.claude.draft_article(
-            topic, design, answers.get("must", "-"))
-        check = await services.claude.self_check(draft_data)
+        async with spinner:
+            draft_data = await services.claude.draft_article(
+                topic, design, answers.get("must", "-"))
+            await spinner.set_label("self-check")
+            check = await services.claude.self_check(draft_data)
+        await spinner.done("✅ Draft written.")
     except ClaudeError as e:
         services.db.log_audit(user_id, "draft", "-", "error", str(e))
-        await msg.reply_text(f"❌ Claude error: {e}")
+        await spinner.done(f"❌ Claude error: {e}")
         return
     draft_id = services.db.create_draft(
         user_id, draft_data["title_a"], draft_data["title_b"],
@@ -280,12 +359,16 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
                 "⚠️ This draft no longer exists.",
                 reply_markup=blog_menu_keyboard())
             return
-        await update.effective_message.reply_text("✍️ Claude is revising …")
+        status = await update.effective_message.reply_text("✍️ Claude is revising …")
+        spinner = Progress(status, "✍️ Revising")
         gid = draft.get("shopify_article_gid")
         try:
-            new_body = await services.claude.revise_article(draft["body_html"], text)
-            if gid:
-                await services.shopify.update_article(gid, {"body": new_body})
+            async with spinner:
+                new_body = await services.claude.revise_article(
+                    draft["body_html"], text)
+                if gid:
+                    await services.shopify.update_article(gid, {"body": new_body})
+            await spinner.done("✅ Revised.")
         except (ClaudeError, ShopifyError) as e:
             services.db.log_audit(user_id, "article_edit", gid or "-", "error", str(e))
             await update.effective_message.reply_text(f"❌ Error: {e}")
@@ -337,14 +420,17 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
     elif step == "blog:extbody":
         gid = ctx.get("article_gid")
         services.db.set_step(user_id, None, ctx)
-        await update.effective_message.reply_text("✍️ Claude is revising …")
+        status = await update.effective_message.reply_text("✍️ Claude is revising …")
+        spinner = Progress(status, "✍️ Revising")
         try:
-            article = await services.shopify.get_article(gid)
-            new_body = await services.claude.revise_article(article["body"], text)
-            await services.shopify.update_article(gid, {"body": new_body})
+            async with spinner:
+                article = await services.shopify.get_article(gid)
+                new_body = await services.claude.revise_article(article["body"], text)
+                await services.shopify.update_article(gid, {"body": new_body})
+            await spinner.done("✅ Revised.")
         except (ClaudeError, ShopifyError) as e:
             services.db.log_audit(user_id, "article_edit", gid, "error", str(e))
-            await update.effective_message.reply_text(f"❌ Error: {e}")
+            await spinner.done(f"❌ Error: {e}")
             return
         services.db.log_audit(user_id, "article_edit", gid, "ok", text[:200])
         await update.effective_message.reply_text("✅ Article revised.",
@@ -360,6 +446,7 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
     services = context.bot_data["services"]
     msg = update.effective_message
     status = await msg.reply_text(f"✍️ Writing \u201e{kw.keyword}\u201c …")
+    spinner = Progress(status, f"✍️ \u201e{kw.keyword}\u201c")
 
     if proposal and proposal.get("supporting_keywords"):
         supporting = proposal["supporting_keywords"][:8]
@@ -379,19 +466,18 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
             links = []
 
     async def progress(label, findings):
-        try:
-            await status.edit_text(f"✍️ „{kw.keyword}“ — {label}")
-        except Exception:
-            pass  # editing is cosmetic; never fail the run over it
+        await spinner.set_label(label)
 
     try:
-        draft_data, findings = await services.writer.write(
-            kw.keyword, pillar, supporting, internal_links=links,
-            on_progress=progress)
+        async with spinner:
+            draft_data, findings = await services.writer.write(
+                kw.keyword, pillar, supporting, internal_links=links,
+                on_progress=progress)
     except ClaudeError as e:
         services.db.log_audit(user_id, "seo_draft", kw.keyword, "error", str(e))
-        await msg.reply_text(f"❌ Claude error: {e}")
+        await spinner.done(f"❌ Claude error: {e}")
         return
+    await spinner.done(f"✅ \u201e{kw.keyword}\u201c written.")
 
     draft_id = services.db.create_draft(
         user_id, draft_data["title_a"], draft_data["title_b"],
@@ -560,16 +646,19 @@ async def _start_batch(update, context, user_id: int, pillar: str = None):
     picks = ranked[:BATCH_SIZE]
     status = await msg.reply_text(
         f"📋 Creating {len(picks)} proposals for \u201e{pillar}\u201c …")
+    spinner = Progress(status, f"📋 Creating {len(picks)} proposals")
     try:
-        proposals = await propose_articles(
-            services.claude, picks, pillar,
-            services.rules.as_prompt_block() if services.rules else "")
+        async with spinner:
+            proposals = await propose_articles(
+                services.claude, picks, pillar,
+                services.rules.as_prompt_block() if services.rules else "")
     except ClaudeError as e:
-        await status.edit_text(f"❌ Claude error: {e}")
+        await spinner.done(f"❌ Claude error: {e}")
         return
     if not proposals:
-        await status.edit_text("❌ No proposals returned — please try again.")
+        await spinner.done("❌ No proposals returned — please try again.")
         return
+    await spinner.done(f"✅ {len(proposals)} proposals ready.")
 
     batch_id = services.db.create_batch(user_id, pillar, proposals)
     services.db.log_audit(user_id, "batch_proposed", pillar, "ok",
