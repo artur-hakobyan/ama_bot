@@ -12,6 +12,14 @@ class ClaudeError(Exception):
     pass
 
 
+class EmptyResponseError(ClaudeError):
+    """The API answered, but spent the whole budget before emitting any text.
+
+    Distinct from a transport failure: retrying the identical request usually
+    reproduces it, so it is not worth three slow attempts.
+    """
+
+
 SYSTEM_PROMPT = """Du bist der Content-Autor von ama walls (amawalls.com), einem Shop für \
 maßgefertigte großformatige Textildrucke mit austauschbaren Rahmen sowie Akustikbilder.
 
@@ -149,7 +157,19 @@ class ClaudeClient:
                 for block in resp.content:
                     if getattr(block, "type", None) == "text":
                         return block.text
-                raise ClaudeError("Claude returned no text block")
+                # No text block: the budget went entirely on thinking. Name the
+                # cause — "no text block" sent the reader looking for a network
+                # fault that was not there.
+                reason = getattr(resp, "stop_reason", None)
+                raise EmptyResponseError(
+                    f"the model used its whole {max_tokens}-token budget "
+                    f"without writing an answer (stop_reason={reason}). "
+                    "Try again, or shorten the input.")
+            except EmptyResponseError as e:
+                # Retrying the same request reproduces this, so fail fast rather
+                # than spending three two-minute attempts on it.
+                logger.warning("Claude returned no text: %s", e)
+                raise
             except Exception as e:  # anthropic transport/API errors
                 last_error = e
                 logger.warning("Claude call failed (attempt %d/%d): %s",
@@ -189,7 +209,8 @@ Antworte als JSON mit exakt diesen Keys:
  "summary": "Meta-Description: max. 160 Zeichen, enthält das Haupt-Keyword",
  "tags": ["haupt-keyword als erster tag", "dann", "2-4", "weitere"]}}"""
         draft = self._parse_json(
-            await self._ask(prompt, max_tokens=8192, output_schema=DRAFT_SCHEMA))
+            await self._ask(prompt, max_tokens=8192, output_schema=DRAFT_SCHEMA,
+                            effort="low"))
         missing = {"title_a", "title_b", "body_html", "summary", "tags"} - set(draft)
         if missing:
             raise ClaudeError(f"Draft missing keys: {missing}")
@@ -246,7 +267,10 @@ Antworte NUR mit dem vollständigen überarbeiteten HTML, ohne JSON, ohne Erklä
 
 Artikel:
 {body_html}"""
-        return (await self._ask(prompt, max_tokens=16000)).strip()
+        # Without an effort cap a long article can spend the entire budget on
+        # thinking and return no text at all — every other large call sets this,
+        # and this one was missed.
+        return (await self._ask(prompt, max_tokens=16000, effort="low")).strip()
 
     async def self_check(self, draft: dict) -> dict:
         prompt = f"""Prüfe diesen Artikelentwurf gegen deine Richtlinien: deutsch in \

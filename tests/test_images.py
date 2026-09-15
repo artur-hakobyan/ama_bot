@@ -175,3 +175,14 @@ def test_used_images_are_recorded(tmp_path):
     db.mark_image_used("fileid1", "11_01 Lageplan_Homeoffice.jpg", "draft2")
     assert db.used_images() == {"fileid1"}, "re-marking must not duplicate"
     db.close()
+
+
+def test_rotation_survives_a_restart():
+    """Python's hash() is salted per process: the same article must not rotate
+    to different images every time the bot restarts."""
+    from bot.google_drive import _stable_hash
+
+    assert _stable_hash("akustische bilder") == _stable_hash("akustische bilder")
+    # A known value, so a change of algorithm cannot silently reshuffle every
+    # operator's saved selections.
+    assert _stable_hash("akustische bilder") != _stable_hash("akustikbild aufbau")

@@ -2,7 +2,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from bot.claude_client import ClaudeClient, ClaudeError
+from bot.claude_client import (ClaudeClient, ClaudeError,
+                               EmptyResponseError)
 
 
 def _text_response(text: str):
@@ -103,3 +104,60 @@ async def test_effort_omitted_for_models_that_reject_it():
     sonnet = ClaudeClient("k", "claude-sonnet-5", client=fake2)
     await sonnet._ask("x", output_schema={"type": "object"}, effort="low")
     assert create2.await_args.kwargs["output_config"]["effort"] == "low"
+
+
+# --- empty responses --------------------------------------------------------
+
+def _no_text_response():
+    """What the API returns when the budget went entirely on thinking."""
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="thinking", thinking="…")],
+        stop_reason="max_tokens")
+
+
+async def test_an_empty_response_is_not_retried(monkeypatch):
+    """Three two-minute attempts at a request that cannot improve is a 6-minute
+    wait ending in the same failure — the operator saw exactly that."""
+    monkeypatch.setattr(ClaudeClient, "RETRY_BASE_DELAY", 0.0)
+    fake, create = fake_anthropic()
+    create.return_value = _no_text_response()
+    c = ClaudeClient("k", "m", client=fake)
+    with pytest.raises(EmptyResponseError):
+        await c.alt_text("bild")
+    assert create.await_count == 1, "an unimprovable request was retried"
+
+
+async def test_the_empty_response_error_names_the_cause(monkeypatch):
+    """"no text block" sent the reader hunting for a network fault."""
+    monkeypatch.setattr(ClaudeClient, "RETRY_BASE_DELAY", 0.0)
+    fake, create = fake_anthropic()
+    create.return_value = _no_text_response()
+    c = ClaudeClient("k", "m", client=fake)
+    with pytest.raises(EmptyResponseError, match="without writing an answer"):
+        await c.alt_text("bild")
+
+
+async def test_an_empty_response_is_still_a_claude_error(monkeypatch):
+    """Call sites catch ClaudeError; the new type must not escape them."""
+    monkeypatch.setattr(ClaudeClient, "RETRY_BASE_DELAY", 0.0)
+    fake, create = fake_anthropic()
+    create.return_value = _no_text_response()
+    c = ClaudeClient("k", "m", client=fake)
+    with pytest.raises(ClaudeError):
+        await c.alt_text("bild")
+
+
+async def test_apply_review_notes_caps_the_thinking_budget():
+    """The one large call that lacked an effort cap, and so returned no text."""
+    captured = {}
+
+    class Recorder(ClaudeClient):
+        async def _ask(self, prompt, **kwargs):
+            captured.update(kwargs)
+            return "<p>ok</p>"
+
+    c = Recorder("k", "claude-sonnet-5", client=SimpleNamespace(
+        messages=SimpleNamespace(create=None)))
+    await c.apply_review_notes("<p>x</p>", [{"quote": "q", "note": "n",
+                                             "kind": "comment"}])
+    assert captured.get("effort") == "low", "no effort cap on a 16k-token call"

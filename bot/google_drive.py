@@ -152,9 +152,9 @@ def suggest_images(images: list, keywords: list, limit: int = 3,
     good = [(s, i) for s, i in scored if s >= MIN_USEFUL_SCORE]
     # Rotate within a score tier: highest score still wins, but among equals the
     # order varies per article instead of being fixed by the Drive listing.
-    rotation = abs(hash(" ".join(keywords))) if keywords else 0
+    rotation = _stable_hash(" ".join(keywords)) if keywords else 0
     good.sort(key=lambda pair: (-pair[0],
-                                (hash(pair[1]["name"]) + rotation) % 10**6))
+                                (_stable_hash(pair[1]["name"]) + rotation) % 10**6))
 
     # One image per artwork: the leading "02_01" style code identifies the
     # motif, so a second crop of it adds nothing to the choice.
@@ -174,6 +174,17 @@ def suggest_images(images: list, keywords: list, limit: int = 3,
         if not any(p["name"] == i["name"] for p in picked):
             picked.append(dict(i, score=s))
     return picked
+
+
+def _stable_hash(text: str) -> int:
+    """A digest that survives a restart.
+
+    Python's hash() is salted per process, so the same article would rotate to a
+    different selection every time the bot restarts — breaking the promise that
+    re-opening a draft shows the images you were already looking at.
+    """
+    import hashlib
+    return int(hashlib.blake2b(text.encode("utf-8"), digest_size=8).hexdigest(), 16)
 
 
 MOTIF_CODE = re.compile(r"^(\d{2}_\d{2})")
