@@ -692,7 +692,8 @@ async def _offer_images(msg, services, draft_id: str, keyword: str, pillar: str,
     try:
         images = services.images_cached()
         picks = suggest_images(images, [keyword, pillar],
-                               prefer=_image_prefs(services))
+                               prefer=_image_prefs(services),
+                               exclude=services.db.used_images())
     except Exception as e:                      # Drive hiccup must not block review
         logger.warning("Image lookup failed: %s", e)
         return
@@ -728,6 +729,11 @@ async def _offer_images(msg, services, draft_id: str, keyword: str, pillar: str,
         ctx = services.db.get_session(user_id)["context"]
         ctx["draft_id"] = draft_id
         ctx.update({"img_keyword": keyword, "img_pillar": pillar})
+        # The button only carries a position, so the offered files are recorded
+        # here; without this the chosen image cannot be identified afterwards
+        # and the same mockups keep coming back on the next article.
+        ctx["img_offered"] = [{"id": p["id"], "name": p["name"]}
+                              for p in picks[:len(media)]]
         services.db.set_step(user_id, "blog:imagefeedback", ctx)
     await msg.reply_text(
         "🖼 Matching mockups — which one for the article?\n\n"
@@ -1154,10 +1160,26 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                           reply_markup=blog_menu_keyboard())
             return
         if action == "useimg":
+            # Mark it used so later articles are offered something else: the
+            # library has only eight office mockups, and without this every
+            # article was handed the same three.
+            chosen = None
+            offered = services.db.get_session(user_id)["context"].get(
+                "img_offered") or []
+            try:
+                chosen = offered[int(parts[1]) - 1] if len(parts) > 1 else None
+            except (ValueError, IndexError):
+                chosen = None
+            if chosen:
+                services.db.mark_image_used(chosen["id"], chosen["name"],
+                                            draft["id"])
+                services.db.log_audit(user_id, "image_used", draft["id"], "ok",
+                                      chosen["name"][:120])
             # Shopify's article image takes a public URL; Drive links are not
             # publicly served, so the operator attaches it in the admin for now.
+            name = f"\n{chosen['name'][:70]}" if chosen else ""
             await query.edit_message_text(
-                f"🖼 Image {parts[1] if len(parts) > 1 else ''} noted.\n"
+                f"🖼 Image {parts[1] if len(parts) > 1 else ''} noted.{name}\n"
                 "Upload it as the featured image in the Shopify admin — "
                 "the draft article is already there.")
         else:

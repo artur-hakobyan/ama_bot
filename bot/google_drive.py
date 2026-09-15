@@ -122,7 +122,7 @@ MIN_USEFUL_SCORE = 5
 
 
 def suggest_images(images: list, keywords: list, limit: int = 3,
-                   prefer: list = None) -> list:
+                   prefer: list = None, exclude: set = None) -> list:
     """Best mockups for an article, best first, never the same image twice.
 
     Returns [] when nothing scores above the usefulness floor — the caller then
@@ -134,16 +134,27 @@ def suggest_images(images: list, keywords: list, limit: int = 3,
     better score: three shots of one artwork are not a choice.
 
     `prefer` are words the operator asked to favour ("büro", "homeoffice").
+    `exclude` are file ids already used by an earlier article.
+
+    Scores are coarse — a filename rarely contains the keyword, so most office
+    mockups tie on the same value. Sorting by score alone therefore returned an
+    identical top three for every article forever. Ties are broken by how long
+    ago a motif was last offered, so the library rotates instead of repeating.
     """
+    exclude = exclude or set()
     seen = set()
     scored = []
     for i in images:
-        if i["name"] in seen:
+        if i["name"] in seen or i["id"] in exclude:
             continue
         seen.add(i["name"])
         scored.append((score_image(i["name"], keywords, prefer), i))
     good = [(s, i) for s, i in scored if s >= MIN_USEFUL_SCORE]
-    good.sort(key=lambda pair: -pair[0])
+    # Rotate within a score tier: highest score still wins, but among equals the
+    # order varies per article instead of being fixed by the Drive listing.
+    rotation = abs(hash(" ".join(keywords))) if keywords else 0
+    good.sort(key=lambda pair: (-pair[0],
+                                (hash(pair[1]["name"]) + rotation) % 10**6))
 
     # One image per artwork: the leading "02_01" style code identifies the
     # motif, so a second crop of it adds nothing to the choice.

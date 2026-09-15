@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS batches (
   status TEXT NOT NULL DEFAULT 'proposed',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS images_used (
+  file_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  draft_id TEXT,
+  used_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
@@ -255,6 +261,18 @@ class Database:
             " ('proposed','running') ORDER BY created_at DESC LIMIT 1",
             (user_id,)).fetchone()
         return self.get_batch(row["id"]) if row else None
+
+    # --- image inventory ---
+    def mark_image_used(self, file_id: str, name: str, draft_id: str = ""):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO images_used (file_id, name, draft_id)"
+            " VALUES (?, ?, ?)", (file_id, name, draft_id))
+        self._conn.commit()
+
+    def used_images(self) -> set:
+        """File ids already attached to an article, so they are not re-offered."""
+        return {r["file_id"] for r in
+                self._conn.execute("SELECT file_id FROM images_used")}
 
     # --- audit ---
     def recent_audit(self, limit: int = 20) -> list:

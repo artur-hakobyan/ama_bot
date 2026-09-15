@@ -109,3 +109,69 @@ def test_no_preference_when_none_was_given(tmp_path):
     assert _image_prefs(services) == []
     services.rules = None
     assert _image_prefs(services) == []
+
+
+# --- rotation and exhaustion ------------------------------------------------
+
+def _office(n, motif):
+    return _img(f"{motif} Motiv {n}_Homeoffice.jpg")
+
+
+def test_different_articles_get_different_selections():
+    """Every article was handed the same three mockups, forever.
+
+    Filenames rarely contain the keyword, so all eight office mockups tie on the
+    same score and sorting by score alone fixed the order permanently.
+    """
+    images = [_office(n, f"0{n}_01") for n in range(1, 7)]
+    a = {p["name"] for p in suggest_images(images, ["akustische bilder"], 3,
+                                           prefer=["homeoffice"])}
+    b = {p["name"] for p in suggest_images(images, ["akustikbild aufbau"], 3,
+                                           prefer=["homeoffice"])}
+    assert a != b, "two different articles were offered an identical selection"
+
+
+def test_the_same_article_is_stable():
+    """Rotation must not mean random: re-opening a draft shows the same three."""
+    images = [_office(n, f"0{n}_01") for n in range(1, 7)]
+    first = [p["name"] for p in suggest_images(images, ["akustische bilder"], 3)]
+    again = [p["name"] for p in suggest_images(images, ["akustische bilder"], 3)]
+    assert first == again
+
+
+def test_a_used_image_is_not_offered_again():
+    images = [_office(n, f"0{n}_01") for n in range(1, 7)]
+    picks = suggest_images(images, ["akustische bilder"], 3)
+    used = {picks[0]["id"]}
+    later = suggest_images(images, ["akustische bilder"], 3, exclude=used)
+    assert all(p["id"] not in used for p in later)
+
+
+def test_a_higher_score_still_wins_over_rotation():
+    """Rotation breaks ties only; it must never outrank a better match."""
+    images = [_img("11_01 Lageplan_Homeoffice.jpg"),
+              _img("06_02 Zeeland_Wohnzimmer.jpg")]
+    picks = suggest_images(images, ["akustische bilder"], 1,
+                           prefer=["homeoffice"])
+    assert "Homeoffice" in picks[0]["name"]
+
+
+def test_exhausting_the_library_returns_fewer_rather_than_repeats():
+    images = [_office(n, f"0{n}_01") for n in range(1, 4)]
+    used = {i["name"] for i in images[:2]}
+    picks = suggest_images(images, ["akustische bilder"], 3, exclude=used)
+    assert len(picks) == 1
+    assert picks[0]["name"] not in used
+
+
+def test_used_images_are_recorded(tmp_path):
+    """The button carries only a position, so the file must be recorded on use."""
+    from bot.db import Database
+
+    db = Database(str(tmp_path / "t.db"))
+    assert db.used_images() == set()
+    db.mark_image_used("fileid1", "11_01 Lageplan_Homeoffice.jpg", "draft1")
+    assert db.used_images() == {"fileid1"}
+    db.mark_image_used("fileid1", "11_01 Lageplan_Homeoffice.jpg", "draft2")
+    assert db.used_images() == {"fileid1"}, "re-marking must not duplicate"
+    db.close()
