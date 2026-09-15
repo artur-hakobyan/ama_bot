@@ -239,6 +239,16 @@ class Database:
                            (*fields.values(), batch_id))
         self._conn.commit()
 
+    def has_started(self, user_id: int) -> bool:
+        """Whether this user has ever opened the bot.
+
+        Telegram refuses a bot's first message ("Chat not found"), so a
+        scheduled batch can only reach someone with a session row.
+        """
+        return self._conn.execute(
+            "SELECT 1 FROM sessions WHERE user_id = ?",
+            (user_id,)).fetchone() is not None
+
     def active_batch(self, user_id: int):
         row = self._conn.execute(
             "SELECT id FROM batches WHERE user_id = ? AND status IN"
@@ -247,6 +257,12 @@ class Database:
         return self.get_batch(row["id"]) if row else None
 
     # --- audit ---
+    def recent_audit(self, limit: int = 20) -> list:
+        """Newest audit entries first — for /health and for tests."""
+        return [dict(r) for r in self._conn.execute(
+            "SELECT user_id, action, target, result, detail, created_at"
+            " FROM audit_log ORDER BY id DESC LIMIT ?", (limit,))]
+
     def log_audit(self, user_id, action, target, result, detail=""):
         self._conn.execute(
             "INSERT INTO audit_log (user_id, action, target, result, detail)"

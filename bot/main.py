@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 from telegram import BotCommand, Update
-from telegram.error import NetworkError
+from telegram.error import BadRequest, Forbidden, NetworkError
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
@@ -30,6 +30,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user:
             services.db.log_audit(user.id, "access", "/start", "denied", "not allowlisted")
         return
+    # Telegram forbids a bot writing first, so a scheduled batch can only reach
+    # someone who has opened the chat. get_session creates the row, which makes
+    # "who is reachable?" answerable before Tuesday instead of after it fails.
+    services.db.get_session(user.id)
+    services.db.log_audit(user.id, "start", "-", "ok", "chat opened")
     await update.effective_message.reply_text(
         MAIN_MENU_TEXT, reply_markup=main_menu_keyboard(context.bot_data["modules"]))
 
@@ -107,6 +112,29 @@ async def rules_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown")
 
 
+async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Who the weekly batch can actually reach, and what is waiting."""
+    services = context.bot_data["services"]
+    user = update.effective_user
+    if user is None or not is_allowlisted(services.config, user.id):
+        return
+    lines = ["*Weekly batch — who it reaches*", ""]
+    for uid in sorted(services.config.allowlist_user_ids):
+        started = services.db.has_started(uid)
+        mark = "✅" if started else "⚠️"
+        note = "" if started else "  — must send /start to the bot once"
+        lines.append(f"{mark} `{uid}`{note}")
+    unreachable = [u for u in services.config.allowlist_user_ids
+                   if not services.db.has_started(u)]
+    if unreachable:
+        lines += ["", "_Telegram does not let a bot message someone first._"]
+    open_batch = services.db.active_batch(user.id)
+    lines += ["", f"Open batch: {'yes' if open_batch else 'no'}"]
+    lines.append("Next run: Monday 18:00 (Yerevan)")
+    await update.effective_message.reply_text("\n".join(lines),
+                                              parse_mode="Markdown")
+
+
 async def noop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Coming soon 🚧")
 
@@ -145,19 +173,42 @@ async def _register_commands(app: Application):
         BotCommand("menu", "Show the main menu"),
         BotCommand("stop", "Cancel the current action"),
         BotCommand("rules", "Show or remove learned writing rules"),
+        BotCommand("health", "Check who the weekly batch can reach"),
     ])
 
 
 async def weekly_batch_job(context: ContextTypes.DEFAULT_TYPE):
     """Tuesday 18:00 Yerevan: propose the week's articles to every operator."""
     services = context.bot_data["services"]
+    log = logging.getLogger(__name__)
     from bot.modules.blog import scheduled_batch
+    reached = 0
     for user_id in sorted(services.config.allowlist_user_ids):
         try:
             await scheduled_batch(context, user_id)
+            reached += 1
+        except Forbidden:
+            # The operator blocked the bot or deleted the chat.
+            services.db.log_audit(user_id, "weekly_batch", "-", "skipped",
+                                  "bot blocked by user")
+            log.warning("Weekly batch: %s has blocked the bot — skipped.", user_id)
+        except BadRequest as e:
+            # Telegram forbids a bot writing first: until the operator presses
+            # Start, send_message fails with "Chat not found". That is a setup
+            # step the operator must take, not a fault in the run — a stack
+            # trace here buried a run that otherwise succeeded for everyone else.
+            if "chat not found" in str(e).lower():
+                services.db.log_audit(user_id, "weekly_batch", "-", "skipped",
+                                      "never pressed Start")
+                log.warning(
+                    "Weekly batch: %s has never opened the bot, so Telegram "
+                    "refuses the message. They must send /start once.", user_id)
+            else:
+                log.exception("Weekly batch failed for %s", user_id)
         except Exception:
-            logging.getLogger(__name__).exception(
-                "Weekly batch failed for %s", user_id)
+            log.exception("Weekly batch failed for %s", user_id)
+    if not reached:
+        log.error("Weekly batch reached nobody — no operator has started the bot.")
 
 
 def build_application(services: Services, modules) -> Application:
@@ -171,6 +222,7 @@ def build_application(services: Services, modules) -> Application:
     app.add_handler(CommandHandler("menu", start_cmd))
     app.add_handler(CommandHandler("stop", stop_cmd))
     app.add_handler(CommandHandler("rules", rules_cmd))
+    app.add_handler(CommandHandler("health", health_cmd))
     app.add_handler(CallbackQueryHandler(noop_cb, pattern="^noop$"))
     app.add_handler(CallbackQueryHandler(main_menu_cb, pattern="^main:menu$"))
     for mod in modules:
