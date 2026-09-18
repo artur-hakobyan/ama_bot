@@ -135,6 +135,43 @@ async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                               parse_mode="Markdown")
 
 
+async def team_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """What the whole team is doing — the bot is shared, so the view should be.
+
+    Rules, used keywords and used images are already shared state; this makes
+    the work itself visible so two operators do not review the same article.
+    """
+    services = context.bot_data["services"]
+    user = update.effective_user
+    if user is None or not is_allowlisted(services.config, user.id):
+        return
+    lines = ["*Team activity*", ""]
+
+    batches = services.db.open_batches()
+    if batches:
+        lines.append("*In progress*")
+        for b in batches:
+            who = "you" if b["user_id"] == user.id else f"`{b['user_id']}`"
+            done = b["current_index"]
+            lines.append(f"• {who}: „{b['pillar']}“ — article {done + 1} of "
+                         f"{b['total']}")
+    else:
+        lines.append("_No batch running._")
+
+    pending = services.db.pending_drafts()
+    if pending:
+        lines += ["", "*Waiting for review*"]
+        for d in pending[:6]:
+            who = "you" if d["user_id"] == user.id else f"`{d['user_id']}`"
+            lines.append(f"• {who}: {(d['title_a'] or '')[:46]}")
+
+    rules = services.rules.all() if services.rules else []
+    lines += ["", f"Shared rules: {len(rules)} · /rules to see them",
+              "_Rules, used keywords and used images are shared by everyone._"]
+    await update.effective_message.reply_text("\n".join(lines),
+                                              parse_mode="Markdown")
+
+
 async def noop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Coming soon 🚧")
 
@@ -174,6 +211,7 @@ async def _register_commands(app: Application):
         BotCommand("stop", "Cancel the current action"),
         BotCommand("rules", "Show or remove learned writing rules"),
         BotCommand("health", "Check who the weekly batch can reach"),
+        BotCommand("team", "See what the whole team is working on"),
     ])
 
 
@@ -223,6 +261,7 @@ def build_application(services: Services, modules) -> Application:
     app.add_handler(CommandHandler("stop", stop_cmd))
     app.add_handler(CommandHandler("rules", rules_cmd))
     app.add_handler(CommandHandler("health", health_cmd))
+    app.add_handler(CommandHandler("team", team_cmd))
     app.add_handler(CallbackQueryHandler(noop_cb, pattern="^noop$"))
     app.add_handler(CallbackQueryHandler(main_menu_cb, pattern="^main:menu$"))
     for mod in modules:

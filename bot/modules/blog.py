@@ -435,6 +435,13 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
                         f"{de_line}\n\n"
                         "Use /rules to review or remove it.",
                         parse_mode="Markdown")
+                    # A rule applies to everyone's articles from now on.
+                    await notify_team(
+                        context, services, user_id,
+                        f"📌 *{md_escape(_actor_name(update))}* taught the bot "
+                        f"a new rule:\n„{md_escape(rule_en or verdict['rule_text'])}“"
+                        "\n\n_It applies to every article from now on. "
+                        "Use /rules to review or remove it._")
             except ClaudeError:
                 pass  # a failed classification must never block the edit itself
         draft = services.db.get_draft(draft_id)
@@ -584,12 +591,14 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
     if uncertain:
         header += ("\n\n⚠️ *Please verify:*\n"
                    + "\n".join(f"• {md_escape(str(u))}" for u in uncertain[:6]))
+    # Images come after the text is approved: judging both at once splits the
+    # reviewer's attention, and a rejected article makes its mockups moot.
+    services.db.update_draft(draft_id, image_keyword=kw.keyword,
+                             image_pillar=pillar)
     await msg.reply_text(
         header + "\n\n" + preview_text(draft, admin_url, findings),
         reply_markup=preview_keyboard(draft_id), parse_mode="Markdown",
         disable_web_page_preview=True)
-
-    await _offer_images(msg, services, draft_id, kw.keyword, pillar, user_id)
 
 
 # Room words that can be preferred: they are what the mockup filenames carry.
@@ -898,6 +907,37 @@ async def _redo_proposals(update, context, batch_id, instruction: str,
         parse_mode="Markdown")
 
 
+async def notify_team(context, services, actor_id: int, text: str):
+    """Tell the other operators what just happened.
+
+    Rules, used keywords and used images are already shared — the learning is
+    team-wide. What was missing is visibility: three people worked without
+    seeing each other, so two could review the same article or be surprised by
+    a rule a colleague taught the bot.
+
+    Best-effort per recipient: someone who never pressed Start cannot be
+    messaged, and that must not break the action that triggered this.
+    """
+    for uid in sorted(services.config.allowlist_user_ids):
+        if uid == actor_id:
+            continue
+        if not services.db.has_started(uid):
+            continue
+        try:
+            await context.bot.send_message(uid, text, parse_mode="Markdown",
+                                           disable_web_page_preview=True)
+        except Exception as e:
+            logger.warning("Could not notify %s: %s", uid, e)
+
+
+def _actor_name(update) -> str:
+    """How a teammate is named in a notification."""
+    u = update.effective_user
+    if u is None:
+        return "Someone"
+    return u.first_name or (f"@{u.username}" if u.username else str(u.id))
+
+
 async def _published_titles(services) -> list:
     """Titles already on the blog, so a proposal can avoid repeating them.
 
@@ -1087,6 +1127,12 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                           reply_markup=blog_menu_keyboard())
             return
         services.db.log_audit(user_id, "batch_approved", arg, "ok", "")
+        await notify_team(
+            context, services, user_id,
+            f"▶️ *{md_escape(_actor_name(update))}* started a batch of "
+            f"{len(batch['proposals'])} articles "
+            f"(„{md_escape(batch['pillar'])}“).\n"
+            "_Leave this one to them to avoid duplicate work._")
         # Approval ends the proposal conversation: a message typed later belongs
         # to the article under review, not to a re-proposal.
         services.db.set_step(user_id, None, {})
@@ -1394,6 +1440,17 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"✅ Published: *{md_escape(chosen_title(draft))}*\n{live}",
             parse_mode="Markdown")
+        await notify_team(
+            context, services, user_id,
+            f"📢 *{md_escape(_actor_name(update))}* published "
+            f"„{md_escape(chosen_title(draft))}“\n{live}")
+
+        # Now the text is settled, offer the mockups. Showing them beside the
+        # draft split the reviewer's attention between two decisions, and a
+        # rejected article made its images moot.
+        await _offer_images(query.message, services, arg,
+                            draft.get("image_keyword") or "",
+                            draft.get("image_pillar") or "", user_id)
 
         # Sequential batch: the next article starts only now, so the operator
         # never has two drafts waiting at once.
@@ -1410,7 +1467,10 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("No Google Doc for this draft", show_alert=True)
             return
         status = await query.message.reply_text("💬 Reading your comments …")
-        spinner = Progress(status, "💬 Applying your comments", eta_seconds=60)
+        # Measured on a live run: reading the comments then rewriting a
+        # 1,300-word article against them took over two minutes. The old
+        # one-minute estimate made a normal wait look like a hang.
+        spinner = Progress(status, "💬 Applying your comments", eta_seconds=180)
         try:
             notes = services.docs.review_notes(draft["doc_file_id"])
         except Exception as e:

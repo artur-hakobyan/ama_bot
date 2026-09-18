@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS drafts (
   summary TEXT,
   doc_url TEXT,
   doc_file_id TEXT,
+  image_keyword TEXT,
+  image_pillar TEXT,
   tags_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -61,6 +63,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 DRAFT_COLUMNS = {
     "shopify_article_gid", "chosen_title", "status",
     "title_a", "title_b", "body_html", "summary", "doc_url", "doc_file_id",
+    "image_keyword", "image_pillar",
 }
 
 
@@ -261,6 +264,25 @@ class Database:
             " ('proposed','running') ORDER BY created_at DESC LIMIT 1",
             (user_id,)).fetchone()
         return self.get_batch(row["id"]) if row else None
+
+    def open_batches(self) -> list:
+        """Every operator's unfinished batch, for the shared team view."""
+        import json as _json
+        out = []
+        for r in self._conn.execute(
+                "SELECT id, user_id, pillar, current_index, proposals_json"
+                " FROM batches WHERE status IN ('proposed','running')"
+                " ORDER BY created_at"):
+            d = dict(r)
+            d["total"] = len(_json.loads(d.pop("proposals_json")))
+            out.append(d)
+        return out
+
+    def pending_drafts(self) -> list:
+        """Drafts nobody has published yet, across the whole team."""
+        return [dict(r) for r in self._conn.execute(
+            "SELECT id, user_id, title_a, doc_url FROM drafts"
+            " WHERE status = 'pending' ORDER BY created_at DESC")]
 
     # --- image inventory ---
     def mark_image_used(self, file_id: str, name: str, draft_id: str = ""):
