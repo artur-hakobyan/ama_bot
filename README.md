@@ -82,6 +82,19 @@ By default this uses long polling (`TRANSPORT=polling`), which needs no public U
 webhook mode instead, set `TRANSPORT=webhook` and provide `WEBHOOK_URL` (the public base URL
 Telegram will call) and optionally `WEBHOOK_PORT` (default `8443`) in `.env`.
 
+## Keyword rotation
+
+A keyword counts as used as soon as an article is **written** with it, not when the article is
+published. Within each pillar the bot picks the keywords used least often, best search volume
+first. A keyword gets its second article only after every keyword in that pillar has had one,
+and then a new round starts. Supporting keywords rotate the same way: Claude has to pick them
+from the sheet's least-used keywords. Discarding a draft puts its keywords back in rotation.
+
+The bot writes two columns into every tab of the live Google Sheet, **Used in blog (focus)** and
+**Used in blog (supporting)**. Each line in them is `Title (date, draft|published)`. Don't use
+those column names for anything else. After first deploying this, run
+`python scripts/sync_keyword_marks.py` once to mark keywords that were used before rotation existed.
+
 ## Deploy
 
 Deployment targets a host reachable over SSH (default alias `arturserver`) and runs the bot

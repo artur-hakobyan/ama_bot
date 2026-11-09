@@ -37,6 +37,19 @@ Keyword clusters (researched 2026-07; refresh periodically):
 - **Vermietung:** Wandbilder für Ferienwohnungen, Airbnb Einrichtung, Ferienwohnung einrichten, Boutique-Hotel-Look
 - **Produkt:** Textil-Wandbild, Wandbild mit wechselbarem Motiv
 
+## Keyword rotation (owner decision, 2026-11-09)
+
+The keyword sheet is worked through in rounds. Picking simply "the best" keyword each time left the same 2–3 high-volume keywords in every batch (one was written three times while most of the sheet stayed untouched), which wastes articles on cannibalising each other.
+
+- A keyword is **spent when its article is written** (draft created), not when it is published. Otherwise every unpublished draft returns its keyword to the top of the list.
+- Within a pillar, propose the **least-used keywords first**, best volume / lowest competition among equals. A keyword only gets a second article after every keyword in its pillar has one. Then the next round starts from the best keyword again. A pillar never "runs out".
+- **Supporting keywords rotate too.** They come only from the sheet's least-used pool (`KeywordSheet.supporting_candidates`), are not shared between proposals in the same batch, and are filtered against the pool after Claude answers (`settle_supporting`). Invented keywords can't be tracked, so they are dropped.
+- The batch pillar is the one furthest behind: lowest round first, then the smallest share already written. It is not the first tab.
+- **Discarding** a draft gives its keywords back.
+- Every use is visible in the live Google Sheet. The bot keeps two columns in every tab, `Used in blog (focus)` and `Used in blog (supporting)`, with one line per article: `Title (date, draft|published)`. They are refreshed on write, publish and discard. A failed sheet write is logged and audited but never blocks the article.
+
+Usage lives in the `keyword_uses` table (`bot/db.py`); `keywords_used` is legacy and only read for the one-time backfill.
+
 ## When editing the bot
 
 Any change to article generation (prompts, new content features, image alt-text) must preserve: du-form, problem-first, the two closing sections, the one-keyword rule, and the 160-char summary limit. The `self_check` prompt in claude_client.py must keep validating whatever this file requires.

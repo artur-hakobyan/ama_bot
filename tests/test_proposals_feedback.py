@@ -204,3 +204,27 @@ def test_the_model_may_say_the_pillar_is_exhausted():
     asyncio.run(claude_client.propose_articles(
         FakeClaude(), [], "Grundlagen", published=["Ein Artikel"]))
     assert "offen im Feld" in captured["prompt"]
+
+
+def test_supporting_keywords_are_chosen_from_the_rotation_pool():
+    """Left alone the model reused the same favourites in nearly every article."""
+    import asyncio
+
+    from bot import claude_client
+
+    captured = {}
+
+    class FakeClaude:
+        async def _ask(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return '{"proposals": []}'
+
+        def _parse_json(self, raw):
+            import json
+            return json.loads(raw)
+
+    asyncio.run(claude_client.propose_articles(
+        FakeClaude(), [], "Grundlagen",
+        supporting_pool=["akustikfilz", "nachhallzeit senken"]))
+    assert "AUSSCHLIESSLICH aus dieser" in captured["prompt"]
+    assert "  - nachhallzeit senken" in captured["prompt"]

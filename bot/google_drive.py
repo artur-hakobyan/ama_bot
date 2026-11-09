@@ -88,6 +88,16 @@ class GoogleClient:
             range=f"'{tab}'").execute()
         return resp.get("values", [])
 
+    def sheet_write(self, spreadsheet_id: str, data: list):
+        """Write several single cells in one request.
+
+        `data` is [{"range": "'Tab'!K5", "values": [["text"]]}, …]. RAW keeps a
+        title such as "=Akustik" from being evaluated as a formula.
+        """
+        self._sheets.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"valueInputOption": "RAW", "data": data}).execute()
+
 
 def room_of(filename: str) -> str:
     """The room tag encoded in the mockup filename, if any."""

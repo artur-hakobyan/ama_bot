@@ -57,12 +57,13 @@ def test_audit(db):
 
 def test_keyword_usage_tracking(db):
     assert db.used_keywords() == set()
-    db.mark_keyword_used("Absorber Büro", "Akustik im Büro", "gid://shopify/Article/1")
-    db.mark_keyword_used("akustik büro", "Akustik im Büro")
+    db.record_keyword_use("Absorber Büro", "Akustik im Büro", "focus", "d1")
+    db.record_keyword_use("akustik büro", "Akustik im Büro", "focus")
+    db.record_keyword_use("schallschutz", "Akustik im Büro", "supporting", "d1")
     used = db.used_keywords()
-    assert used == {"absorber büro", "akustik büro"}   # normalised to lowercase
-    db.mark_keyword_used("Absorber Büro", "Akustik im Büro")   # idempotent
-    assert len(db.used_keywords()) == 2
+    assert used == {"absorber büro", "akustik büro"}   # normalised, focus only
+    db.record_keyword_use("Absorber Büro", "Akustik im Büro", "focus", "d2")
+    assert db.keyword_use_counts()["absorber büro"] == 2   # counted, not deduped
 
 
 def test_batch_lifecycle(db):

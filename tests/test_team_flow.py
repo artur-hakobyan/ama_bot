@@ -79,7 +79,7 @@ def test_rules_are_not_split_per_user():
 def test_used_keywords_and_images_are_shared(tmp_path):
     """Two operators must not be handed the same keyword or mockup."""
     db = Database(str(tmp_path / "t.db"))
-    db.mark_keyword_used("akustische bilder", "Grundlagen", "gid1")
+    db.record_keyword_use("akustische bilder", "Grundlagen", "focus", "draft1")
     db.mark_image_used("file1", "mockup.jpg", "draft1")
     # Queried without a user id at all — that is what makes them shared.
     assert "akustische bilder" in db.used_keywords()

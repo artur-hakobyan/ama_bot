@@ -262,13 +262,14 @@ def blog_menu_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def pillar_keyboard(sheet, used: set) -> InlineKeyboardMarkup:
-    """One row per pillar, showing how many keywords remain unwritten."""
+def pillar_keyboard(sheet, uses) -> InlineKeyboardMarkup:
+    """One row per pillar: its current round and the keywords still open in it."""
     rows = []
     for i, pillar in enumerate(sheet.pillars):
-        left = sheet.remaining(pillar, used)
+        left = sheet.remaining(pillar, uses)
         if left:
-            rows.append([InlineKeyboardButton(f"{pillar} ({left})",
+            label = f"{pillar} ({left} left · round {sheet.round_of(pillar, uses)})"
+            rows.append([InlineKeyboardButton(label,
                                               callback_data=f"blog:pillar:{i}")])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="blog:menu")])
     return InlineKeyboardMarkup(rows)
@@ -487,6 +488,106 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
 
 # --- keyword-sheet flow -------------------------------------------------------
 
+# Supporting keywords per article: aim for this many, never more than the max.
+SUPPORTING_TARGET = 6
+SUPPORTING_MIN = 5
+SUPPORTING_MAX = 8
+
+
+def settle_supporting(proposals: list, pool: list) -> list:
+    """Keep each proposal's supporting keywords inside the offered pool.
+
+    The pool is the sheet's least-used slice, so a keyword the model invents —
+    or a favourite it reaches for again — cannot be tracked or rotated. Within
+    one batch no supporting keyword is shared while the pool still has unused
+    ones; a proposal left short is topped up from the pool in rotation order.
+    """
+    canon = {p.strip().lower(): p for p in pool}
+    focus = {p.get("keyword", "").strip().lower() for p in proposals}
+    taken = set(focus)
+    for prop in proposals:
+        own = prop.get("keyword", "").strip().lower()
+        chosen = []
+        for s_kw in prop.get("supporting_keywords") or []:
+            key = str(s_kw).strip().lower()
+            if key in canon and key not in taken and canon[key] not in chosen:
+                chosen.append(canon[key])
+        for allow_shared in (False, True):        # unused first, then repeats
+            for key, name in canon.items():
+                if len(chosen) >= SUPPORTING_MIN:
+                    break
+                if key == own or key in focus or name in chosen:
+                    continue
+                if key in taken and not allow_shared:
+                    continue
+                chosen.append(name)
+        chosen = chosen[:SUPPORTING_MAX]
+        taken.update(c.lower() for c in chosen)
+        prop["supporting_keywords"] = chosen
+    return proposals
+
+
+def _supporting_pool(services, pillar: str, focus: list) -> list:
+    if not services.keywords:
+        return []
+    return services.keywords.supporting_candidates(
+        pillar, services.db.keyword_use_counts("supporting"), exclude=set(focus))
+
+
+def _next_pillar(services):
+    """The pillar furthest behind: lowest round, then least of it done.
+
+    Progress is a share of the pillar, so a 13-keyword pillar is not starved
+    for months while a 110-keyword one works through its list.
+    """
+    sheet = services.keywords
+    uses = services.db.keyword_use_counts()
+    best = None
+    for i, pillar in enumerate(sheet.pillars):
+        total = len(sheet.ranked(pillar, uses))
+        if not total:
+            continue
+        done = (total - sheet.remaining(pillar, uses)) / total
+        key = (sheet.round_of(pillar, uses), done, i)
+        if best is None or key < best[0]:
+            best = (key, pillar)
+    return best[1] if best else None
+
+
+async def _sync_keyword_marks(services, keywords, user_id: int):
+    """Refresh the "Used in blog" cells of these keywords in the live sheet.
+
+    Never fatal: the article is already written and recorded in the database;
+    a sheet that cannot be reached only means the marks catch up next time.
+    """
+    keywords = [k for k in keywords if k]
+    if not services.keywords or not keywords:
+        return
+    marks = services.db.keyword_marks(keywords)
+    target = ", ".join(sorted(marks))[:200]
+    try:
+        rows = await asyncio.to_thread(services.keywords.mark_usage, marks)
+    except Exception as e:
+        logger.warning("Could not mark keywords in the sheet: %s", e)
+        services.db.log_audit(user_id, "keyword_sheet_mark", target, "error",
+                              str(e)[:200])
+        return
+    if rows:
+        services.db.log_audit(user_id, "keyword_sheet_mark", target, "ok",
+                              f"{rows} rows")
+
+
+async def _record_keywords(services, user_id: int, draft_id: str, pillar: str,
+                           focus: str, supporting: list, title: str):
+    """Spend the keywords on this draft, then show it in the sheet."""
+    services.db.record_keyword_use(focus, pillar, "focus", draft_id, title)
+    for s_kw in supporting:
+        services.db.record_keyword_use(s_kw, pillar, "supporting", draft_id, title)
+    services.db.log_audit(user_id, "keyword_used", focus, "ok",
+                          f"draft {draft_id}; supporting: "
+                          + ", ".join(supporting)[:150])
+    await _sync_keyword_marks(services, [focus, *supporting], user_id)
+
 async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
                               proposal: dict = None, batch_id: str = None):
     """Run the three-pass SEO pipeline and file the result as a Shopify draft."""
@@ -496,10 +597,13 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
     spinner = Progress(status, f"✍️ \u201e{kw.keyword}\u201c", eta_seconds=210)
 
     if proposal and proposal.get("supporting_keywords"):
-        supporting = proposal["supporting_keywords"][:8]
+        supporting = proposal["supporting_keywords"][:SUPPORTING_MAX]
+    elif services.keywords:
+        supporting = services.keywords.supporting_candidates(
+            pillar, services.db.keyword_use_counts("supporting"),
+            exclude={kw.keyword})[:SUPPORTING_TARGET]
     else:
-        ranked = services.keywords.ranked(pillar, services.db.used_keywords())
-        supporting = [k.keyword for k in ranked if k.keyword != kw.keyword][:8]
+        supporting = []
 
     # Only link to articles that are actually live, so links never 404.
     links = []
@@ -542,6 +646,8 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
     draft_id = services.db.create_draft(
         user_id, draft_data["title_a"], draft_data["title_b"],
         draft_data["body_html"], draft_data["summary"], draft_data["tags"])
+    await _record_keywords(services, user_id, draft_id, pillar, kw.keyword,
+                           supporting, draft_data["title_a"])
     ctx = services.db.get_session(user_id)["context"]
     ctx.update({"keyword": kw.keyword, "pillar": pillar})
     if batch_id:
@@ -656,21 +762,27 @@ async def _image_feedback(update, context, ctx: dict, instruction: str,
 
 async def _show_keyword(query, services, pillar_index: int, offset: int = 0):
     pillar = services.keywords.pillars[pillar_index]
-    used = services.db.used_keywords()
-    ranked = services.keywords.ranked(pillar, used)
+    uses = services.db.keyword_use_counts()
+    ranked = services.keywords.ranked(pillar, uses)
     if not ranked:
         await query.edit_message_text(
-            f"✅ „{pillar}“ is fully covered — every keyword has an article.",
+            f"⚠️ „{pillar}“ has no keywords in the sheet.",
             reply_markup=blog_menu_keyboard())
         return None, None
     kw = ranked[min(offset, len(ranked) - 1)]
+    times = uses.get(kw.keyword.lower(), 0)
+    sheet = services.keywords
+    stats = (f"📈 {kw.volume:,}/month · Competition: {kw.competition or 'unknown'}"
+             .replace(",", "."))
+    text = (f"📂 *{md_escape(pillar)}* · round {sheet.round_of(pillar, uses)}"
+            f" · {sheet.remaining(pillar, uses)} left in this round\n\n"
+            f"Next keyword ({offset + 1}/{len(ranked)}):\n"
+            f"🔑 *{md_escape(kw.keyword)}*\n{stats}")
+    if times:
+        text += f"\n_Already used in {times} article(s)._"
     await query.edit_message_text(
-        f"📂 *{md_escape(pillar)}*\n\n"
-        f"Next keyword ({offset + 1}/{len(ranked)}):\n"
-        f"🔑 *{md_escape(kw.keyword)}*\n"
-        f"📈 {kw.volume:,}/month · Competition: {kw.competition or 'unknown'}"
-        .replace(",", "."),
-        reply_markup=keyword_confirm_keyboard(pillar_index), parse_mode="Markdown")
+        text, reply_markup=keyword_confirm_keyboard(pillar_index),
+        parse_mode="Markdown")
     return pillar, kw
 
 
@@ -802,7 +914,7 @@ async def _swap_proposal(update, context, batch_id, index, instruction: str,
         picks = [_keyword_for(services, batch["pillar"], proposals[index]["keyword"])]
     else:
         ranked = services.keywords.ranked(
-            batch["pillar"], services.db.used_keywords() | chosen)
+            batch["pillar"], services.db.keyword_use_counts(), exclude=chosen)
         if not ranked:
             await msg.reply_text("⚠️ No further keyword available.",
                                  reply_markup=blog_menu_keyboard())
@@ -813,6 +925,8 @@ async def _swap_proposal(update, context, batch_id, index, instruction: str,
                              reply_markup=blog_menu_keyboard())
         return
 
+    pool = _supporting_pool(services, batch["pillar"],
+                            [p["keyword"] for p in proposals] + [picks[0].keyword])
     status = await msg.reply_text("🔄 Creating replacement proposal …")
     spinner = Progress(status, f"🔄 Replacing #{index + 1}", eta_seconds=30)
     try:
@@ -823,13 +937,19 @@ async def _swap_proposal(update, context, batch_id, index, instruction: str,
                 guidance=guidance,
                 avoid=[proposals[index]["title"]],
                 published=await _published_titles(services),
-                brief=_brief(services))
+                brief=_brief(services),
+                supporting_pool=pool)
         await spinner.done(f"✅ Proposal #{index + 1} replaced.")
     except ClaudeError as e:
         await spinner.done(f"❌ Claude error: {e}")
         return
     if new:
         proposals[index] = new[0]
+        # The others keep theirs; only the new one is fitted around them.
+        others = {s_kw.lower() for n, p in enumerate(proposals) if n != index
+                  for s_kw in p.get("supporting_keywords", [])}
+        settle_supporting([new[0]], [p for p in pool if p.lower() not in others]
+                          or pool)
         import json as _json
         services.db.update_batch(batch_id, proposals_json=_json.dumps(proposals))
         services.db.log_audit(user_id, "proposal_replaced", batch_id, "ok",
@@ -859,6 +979,7 @@ async def _redo_proposals(update, context, batch_id, instruction: str,
                              reply_markup=blog_menu_keyboard())
         return
 
+    pool = _supporting_pool(services, batch["pillar"], [k.keyword for k in picks])
     status = await msg.reply_text("🔄 Rethinking the proposals …")
     spinner = Progress(status, "🔄 Rethinking the proposals", eta_seconds=45)
     try:
@@ -869,7 +990,8 @@ async def _redo_proposals(update, context, batch_id, instruction: str,
                 guidance=instruction.strip(),
                 avoid=[p["title"] for p in old],
                 published=await _published_titles(services),
-                brief=_brief(services))
+                brief=_brief(services),
+                supporting_pool=pool)
         await spinner.done("✅ New proposals ready.")
     except ClaudeError as e:
         await spinner.done(f"❌ Claude error: {e}")
@@ -877,6 +999,7 @@ async def _redo_proposals(update, context, batch_id, instruction: str,
     if not new:
         await msg.reply_text("❌ No proposals returned — please try again.")
         return
+    settle_supporting(new, pool)
     import json as _json
     services.db.update_batch(batch_id, proposals_json=_json.dumps(new))
     services.db.log_audit(user_id, "batch_reproposed", batch_id, "ok",
@@ -990,15 +1113,18 @@ async def _start_batch(update, context, user_id: int, pillar: str = None):
         await msg.reply_text("⚠️ Keyword sheet not available.")
         return
 
-    pillar = pillar or services.keywords.pillars[0]
-    used = services.db.used_keywords()
-    ranked = services.keywords.ranked(pillar, used)
+    # Not simply the first tab: that sent every manual run to the same pillar.
+    pillar = pillar or _next_pillar(services)
+    ranked = (services.keywords.ranked(pillar, services.db.keyword_use_counts())
+              if pillar else [])
     if not ranked:
-        await msg.reply_text(f"✅ \u201e{pillar}\u201c is fully covered.",
+        await msg.reply_text("⚠️ The keyword sheet has no keywords to propose.",
                              reply_markup=blog_menu_keyboard())
         return
 
+    # Least-used first, so each batch moves on to keywords without an article.
     picks = ranked[:BATCH_SIZE]
+    pool = _supporting_pool(services, pillar, [k.keyword for k in picks])
     status = await msg.reply_text(
         f"📋 Creating {len(picks)} proposals for \u201e{pillar}\u201c …")
     spinner = Progress(status, f"📋 Creating {len(picks)} proposals",
@@ -1009,13 +1135,15 @@ async def _start_batch(update, context, user_id: int, pillar: str = None):
                 services.claude, picks, pillar,
                 services.rules.as_prompt_block() if services.rules else "",
                 published=await _published_titles(services),
-                brief=_brief(services))
+                brief=_brief(services),
+                supporting_pool=pool)
     except ClaudeError as e:
         await spinner.done(f"❌ Claude error: {e}")
         return
     if not proposals:
         await spinner.done("❌ No proposals returned — please try again.")
         return
+    settle_supporting(proposals, pool)
     await spinner.done(f"✅ {len(proposals)} proposals ready.")
 
     batch_id = services.db.create_batch(user_id, pillar, proposals)
@@ -1065,15 +1193,14 @@ async def scheduled_batch(context, user_id: int):
         logger.info("Skipping weekly batch for %s — one is still open", user_id)
         return
 
-    used = services.db.used_keywords()
-    pillars = [(services.keywords.remaining(p, used), p)
-               for p in services.keywords.pillars]
-    pillars = [(n, p) for n, p in pillars if n]
-    if not pillars:
+    pillar = _next_pillar(services)
+    if pillar is None:
         await context.bot.send_message(
-            user_id, "⚠️ All keywords are used up — please add more to the sheet.")
+            user_id, "⚠️ The keyword sheet is empty — please add keywords.")
         return
-    remaining, pillar = max(pillars)
+    uses = services.db.keyword_use_counts()
+    remaining = services.keywords.remaining(pillar, uses)
+    round_no = services.keywords.round_of(pillar, uses)
 
     sent = await context.bot.send_message(
         user_id, f"🗓 Weekly batch: creating proposals for \u201e{pillar}\u201c …")
@@ -1083,11 +1210,12 @@ async def scheduled_batch(context, user_id: int):
 
     await _start_batch(_Shim(), context, user_id, pillar)
 
-    if remaining <= BATCH_SIZE * 2:   # warn before a pillar runs dry
+    if remaining <= BATCH_SIZE:       # this batch closes the round
         await context.bot.send_message(
             user_id,
-            f"ℹ️ \u201e{pillar}\u201c has only {remaining} keywords left. "
-            "Please top up the sheet soon.")
+            f"ℹ️ \u201e{pillar}\u201c finishes round {round_no} with this batch — "
+            "after that its keywords start their next round. Add new keywords "
+            "to the sheet if you want fresh ones instead.")
 
 
 class _KeywordLike:
@@ -1243,10 +1371,10 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⚠️ Keyword sheet not available on this installation.",
                 reply_markup=blog_menu_keyboard())
             return
-        used = services.db.used_keywords()
         await query.edit_message_text(
-            "📊 Choose a pillar topic (remaining keywords in brackets):",
-            reply_markup=pillar_keyboard(services.keywords, used))
+            "📊 Choose a pillar topic (keywords still open in the current round):",
+            reply_markup=pillar_keyboard(services.keywords,
+                                         services.db.keyword_use_counts()))
         return
 
     if action == "pillar":
@@ -1269,9 +1397,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pillar = services.keywords.pillars[pillar_index]
         ctx = services.db.get_session(user_id)["context"]
         offset = int(ctx.get("kw_offset", 0))
-        ranked = services.keywords.ranked(pillar, services.db.used_keywords())
+        ranked = services.keywords.ranked(pillar, services.db.keyword_use_counts())
         if not ranked:
-            await query.edit_message_text("⚠️ No keywords left in this pillar.",
+            await query.edit_message_text("⚠️ This pillar has no keywords.",
                                           reply_markup=blog_menu_keyboard())
             return
         kw = ranked[min(offset, len(ranked) - 1)]
@@ -1427,10 +1555,10 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 services.db.log_audit(user_id, "doc_approved", doc_file_id,
                                       "error", str(e)[:200])
 
-        # A published keyword is spent: never propose it again.
-        ctx = services.db.get_session(user_id)["context"]
-        if ctx.get("keyword"):
-            services.db.mark_keyword_used(ctx["keyword"], ctx.get("pillar", ""), gid)
+        # The keywords were spent when the draft was written; the sheet now
+        # shows the article as published (and under its chosen title).
+        await _sync_keyword_marks(services, services.db.keywords_of_draft(arg),
+                                  user_id)
         try:
             blog_handle, _ = await services.shopify.list_articles(
                 services.config.blog_id, first=1)
@@ -1586,8 +1714,12 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 services.db.log_audit(user_id, "discard", gid, "error", str(e))
                 await query.edit_message_text(f"❌ Shopify error: {e}")
                 return
-        services.db.delete_draft(arg)
-        services.db.log_audit(user_id, "discard", gid or "-", "ok", "")
+        released = services.db.keywords_of_draft(arg)
+        services.db.delete_draft(arg)       # gives its keywords back
+        services.db.log_audit(user_id, "discard", gid or "-", "ok",
+                              f"keywords released: {', '.join(released)}"[:200]
+                              if released else "")
+        await _sync_keyword_marks(services, released, user_id)
         await query.edit_message_text("🗑 Draft discarded.",
                                       reply_markup=blog_menu_keyboard())
 

@@ -759,7 +759,7 @@ PROPOSALS_SCHEMA = {
 async def propose_articles(claude: "ClaudeClient", keywords: list, pillar: str,
                            house_rules_block: str = "", guidance: str = "",
                            avoid: list = None, published: list = None,
-                           brief: str = "") -> list:
+                           brief: str = "", supporting_pool: list = None) -> list:
     """Titles and outlines for a batch, in one call.
 
     One request for all three keeps the weekly run cheap: proposals are short, and
@@ -772,6 +772,11 @@ async def propose_articles(claude: "ClaudeClient", keywords: list, pillar: str,
     new words. `published` is the blog as it stands, so the workflow's "we do not
     want to write about the same topic too often" can actually be honoured, and
     `brief` is the operator's own document, read live from Drive.
+
+    `supporting_pool` is the sheet's least-used keywords. Left to itself the
+    model picked the same favourites ("akustikbild material", "textildruck
+    akustik") for nearly every article; given the pool, it chooses from what is
+    due. The caller still filters the answer against the pool.
     """
     kw_lines = "\n".join(
         f"- {k.keyword} ({k.volume}/Monat, Wettbewerb {k.competition or 'unbekannt'})"
@@ -803,6 +808,17 @@ async def propose_articles(claude: "ClaudeClient", keywords: list, pillar: str,
         avoid_block = (
             f"\nDiese Vorschläge wurden bereits abgelehnt. Wiederhole weder Titel\n"
             f"noch Blickwinkel:\n{titles}\n")
+    if supporting_pool:
+        pool_lines = "\n".join(f"  - {k}" for k in supporting_pool)
+        supporting_rule = (
+            "- „supporting_keywords“: 5–8 Neben-Keywords, AUSSCHLIESSLICH aus dieser\n"
+            "  Liste, wortgleich übernommen. Sie ist nach bisheriger Nutzung sortiert:\n"
+            "  oben = noch nie oder selten verwendet — bevorzuge die oberen, solange\n"
+            "  sie thematisch passen. Kein Neben-Keyword in zwei Vorschlägen.\n"
+            f"{pool_lines}")
+    else:
+        supporting_rule = ("- „supporting_keywords“: 5–10 thematisch passende "
+                           "Neben-Keywords (deutsch, wie im Sheet).")
     prompt = f"""Entwickle für jedes dieser Keywords einen Blogartikel-Vorschlag.
 Noch kein fertiger Text — nur Titel, Gliederung und Neben-Keywords.
 
@@ -814,7 +830,7 @@ Für jeden Vorschlag:
 - „title“: Der Titel enthält das Fokus-Keyword wortwörtlich. Kein Clickbait.
 - „outline“: 5–7 Abschnitte als kurze Stichpunkte, auf ENGLISCH (die Gliederung
   liest ein englischsprachiger Redakteur zur Freigabe, sie wird nicht veröffentlicht).
-- „supporting_keywords“: 5–10 thematisch passende Neben-Keywords (deutsch, wie im Sheet).
+{supporting_rule}
 - „value“: Ein Satz auf ENGLISCH — welchen konkreten Nutzen hat der Leser?
 
 Vielfalt ist Pflicht: Die Vorschläge müssen sich inhaltlich deutlich

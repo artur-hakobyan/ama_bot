@@ -34,6 +34,15 @@ CREATE TABLE IF NOT EXISTS keywords_used (
   article_gid TEXT,
   used_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS keyword_uses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  keyword TEXT NOT NULL,
+  pillar TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT 'focus',
+  draft_id TEXT,
+  title TEXT,
+  used_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS batches (
   id TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -73,6 +82,7 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._migrate()
+        self._backfill_keyword_uses()
         self._conn.commit()
 
     def _migrate(self):
@@ -197,19 +207,90 @@ class Database:
         self._conn.commit()
 
     def delete_draft(self, draft_id: str):
+        """Remove a draft. Its keywords go back into rotation: the article they
+        were spent on no longer exists."""
         self._conn.execute("DELETE FROM drafts WHERE id = ?", (draft_id,))
+        self._conn.execute("DELETE FROM keyword_uses WHERE draft_id = ?",
+                           (draft_id,))
         self._conn.commit()
 
     # --- keyword inventory ---
-    def mark_keyword_used(self, keyword: str, pillar: str, article_gid: str = ""):
+    # A keyword counts as used the moment an article is written with it, not
+    # when it is published: counting only published ones let every unpublished
+    # draft hand its keyword out again, and the same three were written over
+    # and over. `role` is "focus" or "supporting"; they rotate independently.
+
+    def record_keyword_use(self, keyword: str, pillar: str, role: str,
+                           draft_id: str = None, title: str = ""):
         self._conn.execute(
-            "INSERT OR REPLACE INTO keywords_used (keyword, pillar, article_gid)"
-            " VALUES (?, ?, ?)", (keyword.strip().lower(), pillar, article_gid))
+            "INSERT INTO keyword_uses (keyword, pillar, role, draft_id, title)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (keyword.strip().lower(), pillar or "", role, draft_id, title or ""))
         self._conn.commit()
 
+    def keyword_use_counts(self, role: str = "focus") -> dict:
+        """lowercase keyword -> number of articles that used it in this role."""
+        return {r["keyword"]: r["n"] for r in self._conn.execute(
+            "SELECT keyword, COUNT(*) AS n FROM keyword_uses WHERE role = ?"
+            " GROUP BY keyword", (role,))}
+
     def used_keywords(self) -> set:
-        rows = self._conn.execute("SELECT keyword FROM keywords_used").fetchall()
-        return {r["keyword"] for r in rows}
+        """Every keyword that has been the focus of at least one article."""
+        return set(self.keyword_use_counts("focus"))
+
+    def keywords_of_draft(self, draft_id: str) -> list:
+        return [r["keyword"] for r in self._conn.execute(
+            "SELECT DISTINCT keyword FROM keyword_uses WHERE draft_id = ?",
+            (draft_id,))]
+
+    def keyword_marks(self, keywords) -> dict:
+        """The text the keyword sheet shows for each keyword, per role.
+
+        One line per article: "Title (2026-11-09, published)". The title and
+        status come from the draft as it is now, so the chosen B-title and a
+        later publish show up when the marks are refreshed. A keyword with no
+        uses maps to empty texts, which clears its cells.
+        """
+        keys = sorted({k.strip().lower() for k in keywords if k and k.strip()})
+        marks = {k: {"focus": [], "supporting": []} for k in keys}
+        if not keys:
+            return {}
+        placeholders = ",".join("?" * len(keys))
+        for r in self._conn.execute(
+                "SELECT u.keyword, u.role, u.used_at, u.title AS used_title,"
+                " d.title_a, d.title_b, d.chosen_title, d.status"
+                " FROM keyword_uses u LEFT JOIN drafts d ON d.id = u.draft_id"
+                f" WHERE u.keyword IN ({placeholders}) ORDER BY u.used_at, u.id",
+                keys):
+            if r["status"] is not None:
+                title = r["title_b"] if r["chosen_title"] == "b" else r["title_a"]
+                state = "published" if r["status"] == "published" else "draft"
+            else:
+                title, state = r["used_title"], "published"
+            line = f"{title or 'earlier article'} ({r['used_at'][:10]}, {state})"
+            marks[r["keyword"]].setdefault(r["role"], []).append(line)
+        return {k: {"focus": "\n".join(v["focus"]),
+                    "supporting": "\n".join(v["supporting"])}
+                for k, v in marks.items()}
+
+    def _backfill_keyword_uses(self):
+        """Seed usage from the history kept before rotation existed.
+
+        Runs while the table is empty. Drafts carry their focus keyword in
+        image_keyword; the older keywords_used table holds published keywords
+        from before that column existed.
+        """
+        if self._conn.execute("SELECT 1 FROM keyword_uses LIMIT 1").fetchone():
+            return
+        self._conn.execute(
+            "INSERT INTO keyword_uses (keyword, pillar, role, draft_id, title, used_at)"
+            " SELECT lower(trim(image_keyword)), COALESCE(image_pillar, ''), 'focus',"
+            " id, title_a, created_at FROM drafts"
+            " WHERE image_keyword IS NOT NULL AND trim(image_keyword) != ''")
+        self._conn.execute(
+            "INSERT INTO keyword_uses (keyword, pillar, role, title, used_at)"
+            " SELECT keyword, pillar, 'focus', '', used_at FROM keywords_used"
+            " WHERE keyword NOT IN (SELECT keyword FROM keyword_uses)")
 
     def next_article_number(self) -> int:
         """Sequential blog number used in the Google Doc filename."""
