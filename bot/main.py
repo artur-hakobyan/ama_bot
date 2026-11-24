@@ -189,9 +189,17 @@ async def main_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update, context):
     err = context.error
-    # Polling drops (laptop sleep, wifi switch, VPN) are transient and
-    # self-healing: log one line, don't spam the chat or a stack trace.
-    if isinstance(err, NetworkError):
+    # BadRequest subclasses NetworkError in python-telegram-bot, but it is
+    # Telegram rejecting what we sent, not a dropped connection. Only the
+    # double tap ("message is not modified") is harmless; anything else — a
+    # broken Markdown preview, say — used to vanish as a "network hiccup" and
+    # leave the operator with no reply at all.
+    if isinstance(err, BadRequest):
+        if "message is not modified" in str(err).lower():
+            return
+    elif isinstance(err, NetworkError):
+        # Polling drops (Telegram 502s, wifi, VPN) are transient and
+        # self-healing: log one line, don't spam the chat or a stack trace.
         logging.getLogger(__name__).warning("Network hiccup: %s", err)
         return
     logging.getLogger(__name__).error("Unhandled error", exc_info=err)
@@ -216,7 +224,7 @@ async def _register_commands(app: Application):
 
 
 async def weekly_batch_job(context: ContextTypes.DEFAULT_TYPE):
-    """Tuesday 18:00 Yerevan: propose the week's articles to every operator."""
+    """Monday 18:00 Yerevan: propose the week's articles to every operator."""
     services = context.bot_data["services"]
     log = logging.getLogger(__name__)
     from bot.modules.blog import scheduled_batch
@@ -269,14 +277,20 @@ def build_application(services: Services, modules) -> Application:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
     app.add_error_handler(error_handler)
 
-    # Weekly run: Tuesday 18:00 Yerevan (UTC+4, no DST).
+    # Weekly run: Monday 18:00 Yerevan (UTC+4, no DST). PTB numbers days from
+    # Sunday=0, so 1 is Monday — the day it has always run on.
     if app.job_queue is not None:
         import datetime as _dt
         yerevan = _dt.timezone(_dt.timedelta(hours=4))
         app.job_queue.run_daily(weekly_batch_job,
                                 time=_dt.time(18, 0, tzinfo=yerevan),
-                                days=(1,),           # Monday=0, so Tuesday=1
-                                name="weekly_batch")
+                                days=(1,),
+                                name="weekly_batch",
+                                # APScheduler drops a job that fires more than
+                                # 1 s late; on 2026-11-23 it was 1.5 s late and
+                                # the whole week's batch silently vanished.
+                                job_kwargs={"misfire_grace_time": 6 * 3600,
+                                            "coalesce": True})
     return app
 
 

@@ -1507,6 +1507,13 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         gid = draft.get("shopify_article_gid")
 
     if action == "pub":
+        # A second tap (or a tap after an error message) must not publish,
+        # notify the team and advance the batch all over again.
+        if draft.get("status") == "published":
+            await query.edit_message_text(
+                f"✅ Already published: *{md_escape(chosen_title(draft))}*",
+                parse_mode="Markdown")
+            return
         # The article was only a Google Doc until now — create it in Shopify,
         # then publish, so nothing reaches the store before approval.
         if not gid and services.config.shopify_enabled:
@@ -1582,6 +1589,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Sequential batch: the next article starts only now, so the operator
         # never has two drafts waiting at once.
+        ctx = services.db.get_session(user_id)["context"]
         batch_id = ctx.get("batch_id")
         if batch_id:
             batch = services.db.get_batch(batch_id)

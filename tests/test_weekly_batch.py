@@ -102,3 +102,25 @@ def test_has_started_tracks_who_opened_the_bot(tmp_path):
     db.get_session(42)                   # what /start does
     assert db.has_started(42) is True
     db.close()
+
+
+def test_a_late_scheduler_tick_still_runs_the_weekly_batch(tmp_path):
+    """On 2026-11-23 the job fired 1.5 s late and APScheduler's default 1 s
+    grace dropped it: nobody got that week's proposals."""
+    from bot.config import Config
+    from bot.main import build_application
+    from bot.modules.registry import Services
+
+    cfg = Config.load({
+        "TELEGRAM_BOT_TOKEN": "123:abc", "ALLOWLIST_USER_IDS": "1",
+        "ANTHROPIC_API_KEY": "k", "SHOPIFY_STORE_DOMAIN": "d",
+        "SHOPIFY_ADMIN_TOKEN": "s", "SHOPIFY_API_VERSION": "2026-07",
+        "BLOG_ID": "gid://shopify/Blog/1"})
+    db = Database(str(tmp_path / "t.db"))
+    app = build_application(Services(config=cfg, db=db, shopify=None, claude=None),
+                            modules=[])
+    job = app.job_queue.get_jobs_by_name("weekly_batch")[0].job
+    assert job.misfire_grace_time >= 3600
+    assert job.coalesce is True
+    assert "mon" in str(job.trigger)          # Monday 18:00 Yerevan, as it has run
+    db.close()
