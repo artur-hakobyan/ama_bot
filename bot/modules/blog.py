@@ -1,6 +1,7 @@
 import asyncio
 import html as html_lib
 import logging
+import re
 from html.parser import HTMLParser
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -141,6 +142,46 @@ def md_escape(text: str) -> str:
     return text
 
 
+def md_link(label: str, url: str) -> str:
+    """An inline link. Telegram reads the URL part literally, so an "_" in a
+    Google Doc id cannot open an italic entity the way a bare URL does."""
+    return f"[{md_escape(label)}]({url.replace(')', '%29')})"
+
+
+_MD_LINK = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
+
+
+def _markdown_to_plain(text: str) -> str:
+    """Drop the markup, keep the words — and keep link URLs exactly as they are."""
+    def plain(part: str) -> str:
+        part = re.sub(r"(?<!\\)[*_`]", "", part)                  # entity markers
+        return re.sub(r"\\([_*`\[])", r"\1", part)               # \_ -> _
+
+    out, pos = [], 0
+    for m in _MD_LINK.finditer(text):
+        out.append(plain(text[pos:m.start()]))
+        out.append(f"{plain(m.group(1))}: {m.group(2)}")
+        pos = m.end()
+    out.append(plain(text[pos:]))
+    return "".join(out)
+
+
+async def send_markdown(send, text: str, **kwargs):
+    """Send with legacy Markdown; if Telegram rejects the markup, send it plain.
+
+    A preview the operator never receives stalls the batch behind it, so a
+    formatting slip must cost the formatting, not the message.
+    """
+    from telegram.error import BadRequest
+    try:
+        return await send(text, parse_mode="Markdown", **kwargs)
+    except BadRequest as e:
+        if "can't parse entities" not in str(e).lower():
+            raise
+        logger.warning("Markdown rejected (%s) — resending as plain text", e)
+        return await send(_markdown_to_plain(text), **kwargs)
+
+
 def preview_text(draft: dict, admin_url, issues: list) -> str:
     lines = [
         # Every block is labelled: the reviewer asked "what is this?" about an
@@ -152,7 +193,7 @@ def preview_text(draft: dict, admin_url, issues: list) -> str:
         md_escape(draft["summary"] or ""),
         "",
         f"Tags: {md_escape(', '.join(draft['tags']))}" if draft["tags"] else "",
-        f"📄 Google Doc draft: {admin_url}" if admin_url else "",
+        f"📄 {md_link('Open the Google Doc draft', admin_url)}" if admin_url else "",
         "",
         "Status: draft for review — goes to Shopify after approval",
     ]
@@ -356,10 +397,9 @@ async def _create_and_preview(update, context, answers: dict, user_id: int):
     draft = services.db.get_draft(draft_id)
     if admin_url is None:
         await _send_article_body(msg, draft["body_html"])
-    await msg.reply_text(
-        preview_text(draft, admin_url, check["issues"]),
-        reply_markup=preview_keyboard(draft_id), parse_mode="Markdown",
-        disable_web_page_preview=True)
+    await send_markdown(
+        msg.reply_text, preview_text(draft, admin_url, check["issues"]),
+        reply_markup=preview_keyboard(draft_id), disable_web_page_preview=True)
 
 
 # --- text-step handling (router calls this) ---------------------------------
@@ -449,10 +489,9 @@ async def handle_step(step: str, update: Update, context: ContextTypes.DEFAULT_T
         admin_url = services.shopify.admin_url(gid) if gid else None
         if admin_url is None:
             await _send_article_body(update.effective_message, draft["body_html"])
-        await update.effective_message.reply_text(
-            preview_text(draft, admin_url, []),
-            reply_markup=preview_keyboard(draft_id), parse_mode="Markdown",
-            disable_web_page_preview=True)
+        await send_markdown(
+            update.effective_message.reply_text, preview_text(draft, admin_url, []),
+            reply_markup=preview_keyboard(draft_id), disable_web_page_preview=True)
     elif step == "blog:exttitle":
         gid = ctx.get("article_gid")
         services.db.set_step(user_id, None, ctx)
@@ -701,10 +740,9 @@ async def _write_from_keyword(update, context, pillar: str, kw, user_id: int,
     # reviewer's attention, and a rejected article makes its mockups moot.
     services.db.update_draft(draft_id, image_keyword=kw.keyword,
                              image_pillar=pillar)
-    await msg.reply_text(
-        header + "\n\n" + preview_text(draft, admin_url, findings),
-        reply_markup=preview_keyboard(draft_id), parse_mode="Markdown",
-        disable_web_page_preview=True)
+    await send_markdown(
+        msg.reply_text, header + "\n\n" + preview_text(draft, admin_url, findings),
+        reply_markup=preview_keyboard(draft_id), disable_web_page_preview=True)
 
 
 # Room words that can be preferred: they are what the mockup filenames carry.
@@ -1229,13 +1267,31 @@ class _KeywordLike:
 
 # --- callbacks ---------------------------------------------------------------
 
+async def answer_quietly(query, *args, **kwargs):
+    """Acknowledge a button tap, tolerating one Telegram already expired.
+
+    Updates are handled one at a time, so a tap made while an article is being
+    written waits minutes; by then Telegram refuses the acknowledgement. That
+    refusal used to abort the handler before it did what was asked.
+    """
+    from telegram.error import BadRequest
+    try:
+        await query.answer(*args, **kwargs)
+    except BadRequest as e:
+        if "query is too old" not in str(e).lower() and \
+                "query id is invalid" not in str(e).lower():
+            raise
+        logger.info("Late button tap, acknowledged too late: %s", e)
+
+
+
 @authorized
 async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     services = context.bot_data["services"]
     query = update.callback_query
     user_id = update.effective_user.id
     action, arg = parse_cb(query.data)
-    await query.answer()
+    await answer_quietly(query)
 
     if action == "menu":
         services.db.set_step(user_id, None, {})
@@ -1664,10 +1720,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         draft = services.db.get_draft(arg)
-        await query.message.reply_text(
-            preview_text(draft, draft.get("doc_url"), findings),
-            reply_markup=preview_keyboard(arg), parse_mode="Markdown",
-            disable_web_page_preview=True)
+        await send_markdown(
+            query.message.reply_text, preview_text(draft, draft.get("doc_url"), findings),
+            reply_markup=preview_keyboard(arg), disable_web_page_preview=True)
         return
 
     elif action == "regen":
@@ -1701,10 +1756,9 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(f"❌ Shopify error: {e}")
                 return
         services.db.log_audit(user_id, "title_toggle", gid or "-", "ok", new_choice)
-        await query.edit_message_text(
-            preview_text(draft, services.shopify.admin_url(gid) if gid else None, []),
-            reply_markup=preview_keyboard(arg), parse_mode="Markdown",
-            disable_web_page_preview=True)
+        await send_markdown(
+            query.edit_message_text, preview_text(draft, services.shopify.admin_url(gid) if gid else None, []),
+            reply_markup=preview_keyboard(arg), disable_web_page_preview=True)
 
     elif action == "editdraft":
         session = services.db.get_session(user_id)

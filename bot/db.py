@@ -300,6 +300,15 @@ class Database:
 
     # --- weekly batches ---
     def create_batch(self, user_id: int, pillar: str, proposals: list) -> str:
+        """A new batch replaces this operator's unapproved ones.
+
+        Starting twice used to leave the first "proposed" forever, and any open
+        batch makes the weekly run skip that operator. Approved ("running")
+        batches are kept: they hold work in progress.
+        """
+        self._conn.execute(
+            "UPDATE batches SET status = 'superseded'"
+            " WHERE user_id = ? AND status = 'proposed'", (user_id,))
         batch_id = secrets.token_hex(4)
         self._conn.execute(
             "INSERT INTO batches (id, user_id, pillar, proposals_json)"

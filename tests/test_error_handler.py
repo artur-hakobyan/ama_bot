@@ -49,3 +49,11 @@ async def test_a_rejected_message_is_reported(monkeypatch, caplog):
                                     "the entity"), monkeypatch)
     msg.reply_text.assert_awaited_once()
     assert "Can't parse entities" in caplog.text
+
+
+async def test_a_stale_button_tap_is_not_an_error(monkeypatch, caplog):
+    with caplog.at_level(logging.ERROR):
+        msg = await _run(BadRequest("Query is too old and response timeout "
+                                    "expired or query id is invalid"), monkeypatch)
+    msg.reply_text.assert_not_awaited()
+    assert "Unhandled" not in caplog.text

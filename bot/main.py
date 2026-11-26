@@ -178,7 +178,8 @@ async def noop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def main_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    from bot.modules.blog import answer_quietly
+    await answer_quietly(query)
     services = context.bot_data["services"]
     user = update.effective_user
     if user is not None:
@@ -195,7 +196,13 @@ async def error_handler(update, context):
     # broken Markdown preview, say — used to vanish as a "network hiccup" and
     # leave the operator with no reply at all.
     if isinstance(err, BadRequest):
-        if "message is not modified" in str(err).lower():
+        text = str(err).lower()
+        if "message is not modified" in text:
+            return
+        if "query is too old" in text:
+            # A tap Telegram expired while the bot was busy; the action itself
+            # is handled (see answer_quietly). Nothing for the operator to do.
+            logging.getLogger(__name__).info("Late button tap: %s", err)
             return
     elif isinstance(err, NetworkError):
         # Polling drops (Telegram 502s, wifi, VPN) are transient and
